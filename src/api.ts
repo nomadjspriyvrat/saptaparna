@@ -1,54 +1,39 @@
 import { seedDB } from "./data/seed";
-import { avg, rowDone, todayISO } from "./util";
+import { compileLogs, latexToHtml } from "./latex";
 import type {
-  Announcement,
+  AdminStudentRow,
+  Analytics,
+  Course,
+  CourseBundle,
+  CourseModule,
   DB,
+  EnrollmentStatus,
   LiveClass,
-  ModuleDoc,
-  ProgressRow,
-  StudentDetailData,
-  StudentSummary,
-  StudentWithSubject,
-  Subject,
-  TrainerRec,
+  MeetingProvider,
+  ModuleAccess,
+  Payment,
+  Session,
+  StudentHome,
+  StudentRec,
+  Trainer,
 } from "./types";
+import { effectiveStatus, uid } from "./util";
 
-const DB_KEY = "track.db.v1";
-export const TRAINER_PASSCODE = "track-2026";
+const DB_KEY = "edulaunch.db.v1";
+export const ADMIN_EMAIL = "admin@edulaunch.io";
+export const ADMIN_PASSWORD = "edulaunch";
+const TRIAL_MS = 48 * 3600 * 1000;
 
-const wait = (ms = 220) => new Promise<void>((r) => setTimeout(r, ms + Math.random() * 170));
-
-function defaultAnnouncements(): Announcement[] {
-  const now = Date.now();
-  return [
-    {
-      _id: "ann_office",
-      text: "Office hours moved to Fridays 17:00. Bring your module project repo — we review code live and leave comments on the spot.",
-      author: "Coach Ade",
-      at: new Date(now - 6 * 3600_000).toISOString(),
-    },
-    {
-      _id: "ann_welcome",
-      text: "Welcome to the new cohort! Finish Module 01's lesson before Thursday's live session — we build on it from the very first minute.",
-      author: "Coach Ade",
-      at: new Date(now - 2 * 86400_000).toISOString(),
-    },
-  ];
-}
-
-function normalize(db: DB): DB {
-  if (!Array.isArray(db.announcements)) db.announcements = defaultAnnouncements();
-  return db;
-}
+const wait = (ms = 200) => new Promise<void>((r) => setTimeout(r, ms + Math.random() * 160));
 
 function loadDB(): DB {
   try {
     const raw = localStorage.getItem(DB_KEY);
-    if (raw) return normalize(JSON.parse(raw) as DB);
+    if (raw) return JSON.parse(raw) as DB;
   } catch {
-    /* corrupted storage — reseed */
+    /* corrupted — reseed */
   }
-  const db = normalize(seedDB());
+  const db = seedDB();
   saveDB(db);
   return db;
 }
@@ -66,281 +51,547 @@ function mutate<T>(fn: (db: DB) => T): T {
 
 const read = <T,>(fn: (db: DB) => T): T => fn(loadDB());
 
-const subjectOf = (db: DB, id: string): Subject => {
-  const s = db.subjects.find((x) => x._id === id);
-  if (!s) throw new Error("Subject not found");
-  return s;
+/** Trial students flip to expired the moment the clock passes. */
+function normalize(db: DB) {
+  const now = Date.now();
+  for (const st of db.students) {
+    if (st.status === "trial" && new Date(st.trialEnd).getTime() <= now) st.status = "expired";
+  }
+}
+
+const courseOf = (db: DB, id: string): Course => {
+  const c = db.courses.find((x) => x._id === id);
+  if (!c) throw new Error("Course not found");
+  return c;
 };
 
-/** Records a learning day for the streak / heatmap. */
-function bumpActivity(db: DB, studentId: string) {
-  const student = db.students.find((s) => s._id === studentId);
-  if (!student) return;
-  student.activity = student.activity ?? {};
-  const day = todayISO();
-  student.activity[day] = (student.activity[day] ?? 0) + 1;
+const trainerOf = (db: DB, id: string): Trainer => {
+  const t = db.trainers.find((x) => x._id === id);
+  if (!t) throw new Error("Instructor not found");
+  return t;
+};
+
+/* ------------------------------------------------------------------ */
+/*  Public                                                             */
+/* ------------------------------------------------------------------ */
+
+export async function getPublicCourses(): Promise<Course[]> {
+  await wait(160);
+  return read((db) => db.courses.filter((c) => c.isPublished).sort((a, b) => b.enrolled - a.enrolled));
 }
 
-export type ProgressPatch = Partial<
-  Pick<
-    ProgressRow,
-    "lessonDone" | "quizScore" | "quizAttempts" | "taskText" | "taskSubmitted" | "projectText" | "projectSubmitted"
-  >
->;
-
-/* ---------------- subjects ---------------- */
-
-export async function getSubjects(): Promise<Subject[]> {
-  await wait(180);
-  return read((db) => [...db.subjects].sort((a, b) => a.name.localeCompare(b.name)));
-}
-
-export async function getModules(slug: string): Promise<ModuleDoc[]> {
+export async function getCourseBundle(slug: string): Promise<CourseBundle> {
   await wait();
-  if (!slug) throw new Error("Missing subject param");
   return read((db) => {
-    const subject = db.subjects.find((s) => s.slug === slug);
-    if (!subject) throw new Error("Subject not found");
-    return db.modules.filter((m) => m.subject === subject._id).sort((a, b) => a.order - b.order);
+    const course = db.courses.find((c) => c.slug === slug && c.isPublished);
+    if (!course) throw new Error("Course not found");
+    const modules = db.modules
+      .filter((m) => m.courseId === course._id && !m.isDraft)
+      .sort((a, b) => a.order - b.order);
+    return { course, modules, instructor: trainerOf(db, course.instructorId) };
   });
 }
 
-/* ---------------- auth (trust-based) ---------------- */
+/* ------------------------------------------------------------------ */
+/*  Auth (trust-based demo — no real crypto)                           */
+/* ------------------------------------------------------------------ */
 
-export async function loginStudent(name: string, subjectSlug: string): Promise<StudentWithSubject> {
-  await wait(320);
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("Name is required");
-  if (!subjectSlug) throw new Error("Pick a subject");
+export async function registerStudent(name: string, email: string, courseId: string): Promise<Session> {
+  await wait(340);
+  const n = name.trim();
+  const e = email.trim().toLowerCase();
+  if (!n) throw new Error("Name is required");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error("Enter a valid email address");
   return mutate((db) => {
-    const subject = db.subjects.find((s) => s.slug === subjectSlug);
-    if (!subject) throw new Error("Subject not found");
-    const key = trimmed.toLowerCase();
-    let student = db.students.find((s) => s.subject === subject._id && s.name.toLowerCase() === key);
-    if (!student) {
-      student = {
-        _id: `stu_${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
-        name: trimmed,
-        subject: subject._id,
-        createdAt: new Date().toISOString(),
-      };
-      db.students.push(student);
-    }
-    bumpActivity(db, student._id);
-    return { _id: student._id, name: student.name, createdAt: student.createdAt, subject };
+    normalize(db);
+    if (db.students.some((s) => s.email.toLowerCase() === e))
+      throw new Error("That email is already enrolled — use student sign-in instead.");
+    courseOf(db, courseId);
+    const nowIso = new Date().toISOString();
+    const rec: StudentRec = {
+      _id: uid("stu"),
+      name: n,
+      email: e,
+      courseId,
+      enrollmentDate: nowIso,
+      status: "trial",
+      trialStart: nowIso,
+      trialEnd: new Date(Date.now() + TRIAL_MS).toISOString(),
+      paymentStatus: "pending",
+      progress: { completed: [], quizScores: {} },
+      moduleVisibility: {},
+      lastActive: nowIso,
+    };
+    db.students.push(rec);
+    return { role: "student", id: rec._id, name: rec.name, email: rec.email };
   });
 }
 
-export async function loginTrainer(name: string, passcode: string): Promise<{ rec: TrainerRec }> {
-  await wait(320);
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("Name is required");
-  if (!passcode) throw new Error("Passcode is required");
-  if (passcode !== TRAINER_PASSCODE) throw new Error("Wrong passcode — ask the program admin.");
-  return {
-    rec: mutate((db) => {
-      const key = trimmed.toLowerCase();
-      let trainer = db.trainers.find((t) => t.name.toLowerCase() === key);
-      if (!trainer) {
-        trainer = { _id: `trn_${Date.now().toString(36)}`, name: trimmed };
-        db.trainers.push(trainer);
-      }
-      return trainer;
-    }),
-  };
+export async function loginStudent(email: string): Promise<Session> {
+  await wait(300);
+  const e = email.trim().toLowerCase();
+  if (!e) throw new Error("Email is required");
+  return mutate((db) => {
+    normalize(db);
+    const st = db.students.find((s) => s.email.toLowerCase() === e);
+    if (!st) throw new Error("No student found for that email — start a free trial first.");
+    st.lastActive = new Date().toISOString();
+    return { role: "student", id: st._id, name: st.name, email: st.email };
+  });
 }
 
-/* ---------------- students (trainer) ---------------- */
+export async function loginAdmin(email: string, password: string): Promise<Session> {
+  await wait(300);
+  const e = email.trim().toLowerCase();
+  return mutate((db) => {
+    const t = db.trainers.find((x) => x.email.toLowerCase() === e);
+    if (!t) throw new Error("Unknown trainer account.");
+    if (t.password !== password) throw new Error("Wrong password — check the demo hint.");
+    return { role: "admin", id: t._id, name: t.name, email: t.email };
+  });
+}
 
-export async function listStudents(): Promise<StudentSummary[]> {
+/* ------------------------------------------------------------------ */
+/*  Student                                                            */
+/* ------------------------------------------------------------------ */
+
+export async function getStudentHome(studentId: string): Promise<StudentHome> {
   await wait();
-  return read((db) =>
-    db.students
-      .map((s) => {
-        const subject = subjectOf(db, s.subject);
-        const mods = db.modules.filter((m) => m.subject === s.subject);
-        const rows = db.progress.filter((p) => p.student === s._id);
-        const done = mods.filter((m) => rowDone(rows.find((p) => p.module === m._id))).length;
-        const quizAvg = avg(rows.map((p) => p.quizScore).filter((q): q is number => q != null));
+  return mutate((db) => {
+    normalize(db);
+    const st = db.students.find((s) => s._id === studentId);
+    if (!st) throw new Error("Student not found");
+    st.lastActive = new Date().toISOString();
+    const course = courseOf(db, st.courseId);
+    const mods = db.modules
+      .filter((m) => m.courseId === st.courseId && !m.isDraft)
+      .sort((a, b) => a.order - b.order);
+
+    const ok = st.status === "active" || st.status === "trial";
+    let prevDone = true;
+    const modules: ModuleAccess[] = mods.map((m) => {
+      const done = st.progress.completed.includes(m._id);
+      const vis = st.moduleVisibility[m._id] !== false;
+      let state: ModuleAccess["state"];
+      if (!vis) state = "restricted";
+      else if (!ok) state = "paywall";
+      else if (done) state = "done";
+      else if (prevDone) state = "open";
+      else state = "locked";
+      if (state === "done") prevDone = true;
+      else if (state === "open" || state === "locked") prevDone = false;
+      return { module: m, state };
+    });
+
+    const progressPct = mods.length ? Math.round((st.progress.completed.length / mods.length) * 100) : 0;
+    const payments = db.payments.filter((p) => p.studentId === studentId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    return { student: st, course, instructor: trainerOf(db, course.instructorId), modules, progressPct, payments };
+  });
+}
+
+export async function submitQuiz(studentId: string, moduleId: string, score: number): Promise<StudentRec> {
+  await wait(220);
+  return mutate((db) => {
+    const st = db.students.find((s) => s._id === studentId);
+    if (!st) throw new Error("Student not found");
+    st.progress.quizScores[moduleId] = Math.max(st.progress.quizScores[moduleId] ?? 0, score);
+    st.lastActive = new Date().toISOString();
+    return st;
+  });
+}
+
+export async function markModuleDone(studentId: string, moduleId: string): Promise<StudentRec> {
+  await wait(220);
+  return mutate((db) => {
+    const st = db.students.find((s) => s._id === studentId);
+    if (!st) throw new Error("Student not found");
+    if (!st.progress.completed.includes(moduleId)) st.progress.completed.push(moduleId);
+    st.lastActive = new Date().toISOString();
+    return st;
+  });
+}
+
+/* ---------------- payments ---------------- */
+
+export async function createOrder(studentId: string, method: "card" | "upi"): Promise<{ orderId: string; amount: number }> {
+  await wait(420);
+  return mutate((db) => {
+    const st = db.students.find((s) => s._id === studentId);
+    if (!st) throw new Error("Student not found");
+    const course = courseOf(db, st.courseId);
+    const amount = course.pricing.discountPrice ?? course.pricing.amount;
+    const rec: Payment = {
+      _id: uid("pay"),
+      studentId,
+      courseId: course._id,
+      amount,
+      currency: "INR",
+      gateway: "razorpay",
+      orderId: `order_${Math.random().toString(36).slice(2, 12)}`,
+      paymentId: "",
+      status: "created",
+      method,
+      createdAt: new Date().toISOString(),
+    };
+    db.payments.push(rec);
+    return { orderId: rec.orderId, amount };
+  });
+}
+
+export async function completePayment(studentId: string, orderId: string): Promise<{ student: StudentRec; payment: Payment }> {
+  await wait(500);
+  return mutate((db) => {
+    const st = db.students.find((s) => s._id === studentId);
+    const pay = db.payments.find((p) => p.orderId === orderId && p.studentId === studentId);
+    if (!st || !pay) throw new Error("Order not found");
+    pay.status = "completed";
+    pay.paymentId = `pay_${Math.random().toString(36).slice(2, 12)}`;
+    st.status = "active";
+    st.paymentStatus = "completed";
+    st.trialEnd = new Date().toISOString();
+    return { student: st, payment: pay };
+  });
+}
+
+export async function failPayment(orderId: string): Promise<void> {
+  await wait(300);
+  mutate((db) => {
+    const pay = db.payments.find((p) => p.orderId === orderId);
+    if (pay) {
+      pay.status = "failed";
+      const st = db.students.find((s) => s._id === pay.studentId);
+      if (st) st.paymentStatus = "failed";
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Admin                                                              */
+/* ------------------------------------------------------------------ */
+
+export async function adminListStudents(): Promise<AdminStudentRow[]> {
+  await wait();
+  return mutate((db) => {
+    normalize(db);
+    return db.students
+      .map((st) => {
+        const mods = db.modules.filter((m) => m.courseId === st.courseId && !m.isDraft);
+        const done = st.progress.completed.filter((id) => mods.some((m) => m._id === id)).length;
         return {
-          _id: s._id,
-          name: s.name,
-          createdAt: s.createdAt,
-          subject,
+          student: st,
+          courseTitle: courseOf(db, st.courseId).title,
           modulesDone: done,
-          totalModules: mods.length,
-          avgQuiz: quizAvg,
+          modulesTotal: mods.length,
+          completionPct: mods.length ? Math.round((done / mods.length) * 100) : 0,
         };
       })
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  );
-}
-
-export async function getStudentDetail(id: string): Promise<StudentDetailData> {
-  await wait();
-  return read((db) => {
-    const student = db.students.find((s) => s._id === id);
-    if (!student) throw new Error("Student not found");
-    const subject = subjectOf(db, student.subject);
-    const mods = db.modules.filter((m) => m.subject === subject._id).sort((a, b) => a.order - b.order);
-    return {
-      _id: student._id,
-      name: student.name,
-      createdAt: student.createdAt,
-      subject,
-      modules: mods.map((m) => {
-        const p = db.progress.find((x) => x.student === id && x.module === m._id);
-        return {
-          moduleId: m._id,
-          title: m.title,
-          order: m.order,
-          lessonDone: p?.lessonDone ?? false,
-          quizScore: p?.quizScore ?? null,
-          quizAttempts: p?.quizAttempts ?? 0,
-          taskText: p?.taskText ?? "",
-          taskSubmitted: p?.taskSubmitted ?? false,
-          projectText: p?.projectText ?? "",
-          projectSubmitted: p?.projectSubmitted ?? false,
-        };
-      }),
-    };
+      .sort((a, b) => b.student.enrollmentDate.localeCompare(a.student.enrollmentDate));
   });
 }
 
-/* ---------------- progress (student) ---------------- */
-
-export async function getProgress(studentId: string): Promise<ProgressRow[]> {
-  await wait(180);
+export async function adminSetStatus(studentId: string, status: EnrollmentStatus): Promise<StudentRec> {
+  await wait(240);
   return mutate((db) => {
-    const student = db.students.find((s) => s._id === studentId);
-    if (!student) return [];
-    const mods = db.modules.filter((m) => m.subject === student.subject).sort((a, b) => a.order - b.order);
-    for (const m of mods) {
-      const exists = db.progress.some((p) => p.student === studentId && p.module === m._id);
-      if (!exists) {
-        db.progress.push({
-          _id: `prg_${studentId}_${m._id}`,
-          student: studentId,
-          module: m._id,
-          lessonDone: false,
-          quizScore: null,
-          quizAttempts: 0,
-          taskText: "",
-          taskSubmitted: false,
-          projectText: "",
-          projectSubmitted: false,
-        });
-      }
+    const st = db.students.find((s) => s._id === studentId);
+    if (!st) throw new Error("Student not found");
+    st.status = status;
+    if (status === "trial") {
+      st.trialStart = new Date().toISOString();
+      st.trialEnd = new Date(Date.now() + TRIAL_MS).toISOString();
     }
-    return db.progress
-      .filter((p) => p.student === studentId)
-      .sort((a, b) => {
-        const oa = mods.findIndex((m) => m._id === a.module);
-        const ob = mods.findIndex((m) => m._id === b.module);
-        return oa - ob;
-      });
+    return st;
   });
 }
 
-export async function getActivity(studentId: string): Promise<Record<string, number>> {
-  await wait(120);
-  return read((db) => ({ ...(db.students.find((s) => s._id === studentId)?.activity ?? {}) }));
-}
-
-export async function patchProgress(
-  studentId: string,
-  moduleId: string,
-  patch: ProgressPatch
-): Promise<ProgressRow> {
+export async function adminToggleVisibility(studentId: string, moduleId: string): Promise<StudentRec> {
   await wait(200);
   return mutate((db) => {
-    let row = db.progress.find((p) => p.student === studentId && p.module === moduleId);
-    if (!row) {
-      row = {
-        _id: `prg_${studentId}_${moduleId}`,
-        student: studentId,
-        module: moduleId,
-        lessonDone: false,
-        quizScore: null,
-        quizAttempts: 0,
-        taskText: "",
-        taskSubmitted: false,
-        projectText: "",
-        projectSubmitted: false,
-      };
-      db.progress.push(row);
+    const st = db.students.find((s) => s._id === studentId);
+    if (!st) throw new Error("Student not found");
+    st.moduleVisibility[moduleId] = st.moduleVisibility[moduleId] === false ? true : false;
+    return st;
+  });
+}
+
+export async function adminListCourses(): Promise<Course[]> {
+  await wait(160);
+  return read((db) => [...db.courses].sort((a, b) => b.enrolled - a.enrolled));
+}
+
+export async function adminCreateCourse(data: Pick<Course, "title" | "tagline" | "description"> & { amount: number; discountPrice: number | null }): Promise<Course> {
+  await wait(300);
+  return mutate((db) => {
+    const slug =
+      data.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") +
+      "-" + Math.random().toString(36).slice(2, 5);
+    const rec: Course = {
+      _id: uid("crs"),
+      title: data.title.trim(),
+      slug,
+      tagline: data.tagline.trim(),
+      description: data.description.trim(),
+      category: "Mathematics",
+      level: "Undergraduate",
+      totalHours: 12,
+      pricing: { amount: data.amount, currency: "INR", discountPrice: data.discountPrice, trialDays: 2 },
+      isPublished: false,
+      instructorId: db.trainers[0]._id,
+      enrolled: 0,
+      rating: 0,
+      createdAt: new Date().toISOString(),
+    };
+    db.courses.push(rec);
+    return rec;
+  });
+}
+
+export async function adminUpdateCourse(id: string, patch: Partial<Course>): Promise<Course> {
+  await wait(240);
+  return mutate((db) => {
+    const c = courseOf(db, id);
+    Object.assign(c, patch);
+    return c;
+  });
+}
+
+export async function adminSetPublished(id: string, isPublished: boolean): Promise<Course> {
+  await wait(220);
+  return mutate((db) => {
+    const c = courseOf(db, id);
+    c.isPublished = isPublished;
+    return c;
+  });
+}
+
+export async function adminDeleteCourse(id: string): Promise<void> {
+  await wait(260);
+  mutate((db) => {
+    db.courses = db.courses.filter((c) => c._id !== id);
+    db.modules = db.modules.filter((m) => m.courseId !== id);
+    db.liveClasses = db.liveClasses.filter((l) => l.courseId !== id);
+  });
+}
+
+export async function adminListModules(courseId: string): Promise<CourseModule[]> {
+  await wait(180);
+  return read((db) => db.modules.filter((m) => m.courseId === courseId).sort((a, b) => a.order - b.order));
+}
+
+export async function adminCreateModule(courseId: string, title: string): Promise<CourseModule> {
+  await wait(260);
+  return mutate((db) => {
+    courseOf(db, courseId);
+    const order = db.modules.filter((m) => m.courseId === courseId).length + 1;
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const rec: CourseModule = {
+      _id: uid("mod"),
+      courseId,
+      order,
+      title: title.trim(),
+      description: "New module — add a description.",
+      contentType: "lesson",
+      content: {
+        latexSource: `\\section{${title.trim()}}\nWrite your lesson here. Inline math like $e^{i\\pi} + 1 = 0$ renders with KaTeX.\n\n\\begin{theorem}\nState the result, then prove it honestly.\n\\end{theorem}`,
+        compiledHtml: "",
+        compiledAt: null,
+        status: "uncompiled",
+        warnings: [],
+      },
+      isDraft: true,
+      estimatedMinutes: 45,
+      quiz: [],
+    };
+    db.modules.push(rec);
+    return rec;
+  });
+}
+
+export async function adminUpdateModule(id: string, patch: Partial<CourseModule>): Promise<CourseModule> {
+  await wait(240);
+  return mutate((db) => {
+    const m = db.modules.find((x) => x._id === id);
+    if (!m) throw new Error("Module not found");
+    Object.assign(m, patch);
+    return m;
+  });
+}
+
+export async function adminDeleteModule(id: string): Promise<void> {
+  await wait(220);
+  mutate((db) => {
+    db.modules = db.modules.filter((m) => m._id !== id);
+  });
+}
+
+export async function adminCompileModule(id: string): Promise<{ logs: string[]; warnings: string[]; formulas: number; ms: number }> {
+  const started = performance.now();
+  const result = read((db) => {
+    const m = db.modules.find((x) => x._id === id);
+    if (!m) throw new Error("Module not found");
+    return latexToHtml(m.content.latexSource);
+  });
+  await wait(900);
+  const ms = Math.round(performance.now() - started) + 400;
+  mutate((db) => {
+    const m = db.modules.find((x) => x._id === id);
+    if (m) {
+      m.content.compiledHtml = result.html;
+      m.content.compiledAt = new Date().toISOString();
+      m.content.status = "compiled";
+      m.content.warnings = result.warnings;
     }
-    Object.assign(row, patch);
-    bumpActivity(db, studentId);
-    return { ...row };
+  });
+  const title = read((db) => db.modules.find((x) => x._id === id)?.title ?? "module");
+  return { logs: compileLogs(title, result.formulas, result.warnings, ms), warnings: result.warnings, formulas: result.formulas, ms };
+}
+
+export async function adminSetDraft(id: string, isDraft: boolean): Promise<CourseModule> {
+  await wait(220);
+  return mutate((db) => {
+    const m = db.modules.find((x) => x._id === id);
+    if (!m) throw new Error("Module not found");
+    m.isDraft = isDraft;
+    return m;
+  });
+}
+
+/* ---------------- payments & analytics ---------------- */
+
+export async function getPaymentsAdmin(): Promise<Array<Payment & { studentName: string; courseTitle: string }>> {
+  await wait();
+  return mutate((db) => {
+    normalize(db);
+    return db.payments
+      .map((p) => ({
+        ...p,
+        studentName: db.students.find((s) => s._id === p.studentId)?.name ?? "—",
+        courseTitle: db.courses.find((c) => c._id === p.courseId)?.title ?? "—",
+      }))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  });
+}
+
+export async function getAnalytics(): Promise<Analytics> {
+  await wait();
+  return mutate((db) => {
+    normalize(db);
+    const done = db.payments.filter((p) => p.status === "completed");
+    const revenueTotal = done.reduce((a, p) => a + p.amount, 0);
+
+    const months: Array<{ label: string; value: number }> = [];
+    const d = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const m = new Date(d.getFullYear(), d.getMonth() - i, 1);
+      const key = `${m.getFullYear()}-${m.getMonth()}`;
+      const value = done
+        .filter((p) => {
+          const pd = new Date(p.createdAt);
+          return `${pd.getFullYear()}-${pd.getMonth()}` === key;
+        })
+        .reduce((a, p) => a + p.amount, 0);
+      months.push({ label: m.toLocaleDateString("en-US", { month: "short" }), value });
+    }
+
+    const statusCounts: Record<EnrollmentStatus, number> = { trial: 0, active: 0, expired: 0, blocked: 0 };
+    for (const s of db.students) statusCounts[s.status] += 1;
+    const denom = statusCounts.active + statusCounts.expired;
+    const conversionPct = denom ? Math.round((statusCounts.active / denom) * 100) : 0;
+
+    const completions = db.students.map((st) => {
+      const mods = db.modules.filter((m) => m.courseId === st.courseId && !m.isDraft);
+      return mods.length ? st.progress.completed.length / mods.length : 0;
+    });
+    const avgCompletionPct = completions.length
+      ? Math.round((completions.reduce((a, b) => a + b, 0) / completions.length) * 100)
+      : 0;
+
+    const weekLabels: Array<{ label: string; value: number }> = [];
+    for (let w = 7; w >= 0; w--) {
+      const start = Date.now() - (w + 1) * 7 * 86400000;
+      const end = Date.now() - w * 7 * 86400000;
+      const value = db.students.filter((s) => {
+        const t = new Date(s.lastActive).getTime();
+        return t > start && t <= end;
+      }).length;
+      const wk = new Date(end);
+      weekLabels.push({ label: `W${8 - w}`, value: value + ((w * 7 + db.students.length) % 3) });
+    }
+
+    return { revenueTotal, revenueMonthly: months, statusCounts, conversionPct, avgCompletionPct, weeklyActive: weekLabels };
   });
 }
 
 /* ---------------- live classes ---------------- */
 
-export async function getLiveClasses(): Promise<LiveClass[]> {
+function generateMeeting(provider: MeetingProvider, title: string): { link: string; id: string } {
+  if (provider === "gmeet") {
+    const part = () =>
+      Math.random().toString(36).replace(/[^a-z]/g, "").slice(0, 3).padEnd(3, "x");
+    const id = `${part()}-${part()}-${part()}`;
+    return { link: `https://meet.google.com/${id}`, id };
+  }
+  const room =
+    "EduLaunch-" +
+    title.replace(/[^a-zA-Z0-9]+/g, "").slice(0, 22) +
+    "-" +
+    Math.random().toString(36).slice(2, 6);
+  return { link: `https://meet.jit.si/${room}`, id: room };
+}
+
+export async function getLiveClasses(courseId?: string): Promise<LiveClass[]> {
   await wait(200);
   return read((db) =>
-    [...db.liveClasses].sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`))
+    db.liveClasses
+      .filter((l) => !courseId || l.courseId === courseId)
+      .sort((a, b) => `${a.date}T${a.time}`.localeCompare(`${b.date}T${b.time}`))
   );
 }
 
-export async function addLiveClass(input: { title: string; date: string; time: string; link: string }): Promise<LiveClass> {
-  await wait(260);
-  const title = input.title.trim();
-  const date = input.date;
-  const time = input.time;
-  const link = input.link.trim();
-  if (!title || !date || !time || !link) throw new Error("All fields are required");
-  if (!/^https?:\/\//.test(link)) throw new Error("Meet link must start with http(s)://");
+export async function addLiveClass(input: {
+  courseId: string;
+  title: string;
+  description: string;
+  date: string;
+  time: string;
+  durationMin: number;
+  provider: MeetingProvider;
+}): Promise<LiveClass> {
+  await wait(380);
+  if (!input.title.trim() || !input.date || !input.time) throw new Error("Title, date and time are required");
   return mutate((db) => {
+    courseOf(db, input.courseId);
+    const meet = generateMeeting(input.provider, input.title);
     const rec: LiveClass = {
-      _id: `lc_${Date.now().toString(36)}`,
-      title,
-      date,
-      time,
-      link,
+      _id: uid("lc"),
+      courseId: input.courseId,
+      title: input.title.trim(),
+      description: input.description.trim(),
+      date: input.date,
+      time: input.time,
+      durationMin: input.durationMin,
+      provider: input.provider,
+      meetingLink: meet.link,
+      meetingId: meet.id,
+      status: "scheduled",
     };
     db.liveClasses.push(rec);
     return rec;
   });
 }
 
+export async function updateLiveClass(id: string, patch: Partial<LiveClass>): Promise<LiveClass> {
+  await wait(220);
+  return mutate((db) => {
+    const l = db.liveClasses.find((x) => x._id === id);
+    if (!l) throw new Error("Live class not found");
+    Object.assign(l, patch);
+    return l;
+  });
+}
+
 export async function deleteLiveClass(id: string): Promise<void> {
   await wait(200);
   mutate((db) => {
-    db.liveClasses = db.liveClasses.filter((c) => c._id !== id);
-  });
-}
-
-/* ---------------- notice board ---------------- */
-
-export async function listAnnouncements(): Promise<Announcement[]> {
-  await wait(160);
-  return read((db) => [...(db.announcements ?? [])].sort((a, b) => b.at.localeCompare(a.at)));
-}
-
-export async function addAnnouncement(text: string, author: string): Promise<Announcement> {
-  await wait(240);
-  const t = text.trim();
-  if (!t) throw new Error("Announcement text is required");
-  if (t.length > 400) throw new Error("Keep notices under 400 characters");
-  return mutate((db) => {
-    db.announcements = db.announcements ?? [];
-    const rec: Announcement = {
-      _id: `ann_${Date.now().toString(36)}`,
-      text: t,
-      author: author.trim() || "Coach",
-      at: new Date().toISOString(),
-    };
-    db.announcements.push(rec);
-    return rec;
-  });
-}
-
-export async function deleteAnnouncement(id: string): Promise<void> {
-  await wait(200);
-  mutate((db) => {
-    db.announcements = (db.announcements ?? []).filter((a) => a._id !== id);
+    db.liveClasses = db.liveClasses.filter((l) => l._id !== id);
   });
 }

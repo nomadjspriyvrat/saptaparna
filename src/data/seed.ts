@@ -1,885 +1,617 @@
-import type { DB, LiveClass, ModuleDoc, ProgressRow, QuizQ, StudentRec, Subject } from "../types";
+import { latexToHtml } from "../latex";
+import type { Course, CourseModule, DB, LiveClass, Payment, StudentRec, Trainer } from "../types";
 
-let seq = 0;
-const uid = (p: string) => `${p}${(++seq).toString(36).padStart(3, "0")}${Math.random().toString(36).slice(2, 7)}`;
-
-const dPlus = (n: number) => {
-  const d = new Date();
-  d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+const now = Date.now();
+const iso = (dayOffset: number, hour = 12) => {
+  const d = new Date(now + dayOffset * 86400000);
+  d.setHours(hour, 0, 0, 0);
+  return d.toISOString();
+};
+const dateOnly = (dayOffset: number) => {
+  const d = new Date(now + dayOffset * 86400000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
-/* ------------------------------------------------------------------ */
-/* Subjects                                                            */
-/* ------------------------------------------------------------------ */
+const T1 = "trn_1";
 
-const SUBJECTS: Array<{ name: string; slug: string }> = [
-  { name: "Full-Stack Web Development (MERN)", slug: "mern" },
-  { name: "Data Science with Python", slug: "data-science" },
-  { name: "Machine Learning", slug: "machine-learning" },
-  { name: "Java Programming", slug: "java" },
-  { name: "Agentic AI", slug: "agentic-ai" },
-  { name: "Generative AI", slug: "generative-ai" },
-  { name: "Python Programming", slug: "python" },
-  { name: "C & C++", slug: "c-cpp" },
-  { name: "Data Structures & Algorithms (DSA)", slug: "dsa" },
+const trainers: Trainer[] = [
+  {
+    _id: T1,
+    name: "Dr. Ananya Rao",
+    email: "admin@edulaunch.io",
+    password: "edulaunch",
+    role: "admin",
+    bio: "Former IISc faculty, 12 years of teaching real analysis and measure theory. Believes every student deserves beautifully typeset mathematics — and that ε–δ clicks once you see it argued honestly, line by line.",
+    hue: 42,
+    specialization: ["Real Analysis", "Measure Theory", "Functional Analysis"],
+    experienceYears: 12,
+  },
+];
+
+const courses: Course[] = [
+  {
+    _id: "crs_calc",
+    title: "Advanced Calculus & Real Analysis",
+    slug: "advanced-calculus",
+    tagline: "From ε–δ to Lebesgue — a rigorous, LaTeX-typeset journey through the foundations of analysis.",
+    description:
+      "A proof-based tour of single-variable and classical analysis: limits, continuity, differentiation, the Riemann integral, sequences of functions, power series, Fourier series, and a first look at measure theory. Every lesson is authored in LaTeX and compiled on the platform, so the mathematics reads exactly as it would in a published text.",
+    category: "Mathematics",
+    level: "Undergraduate",
+    totalHours: 32,
+    pricing: { amount: 4999, currency: "INR", discountPrice: 2999, trialDays: 2 },
+    isPublished: true,
+    instructorId: T1,
+    enrolled: 1284,
+    rating: 4.9,
+    createdAt: iso(-210),
+  },
+  {
+    _id: "crs_linalg",
+    title: "Linear Algebra, Done Rigorously",
+    slug: "linear-algebra",
+    tagline: "Vector spaces, linear maps, and spectral theory with complete proofs.",
+    description:
+      "A second course in linear algebra that treats the subject the way pure mathematics does: axioms first, matrices as consequences. Includes eigen-theory, inner product spaces, and the spectral theorem.",
+    category: "Mathematics",
+    level: "Undergraduate",
+    totalHours: 18,
+    pricing: { amount: 3499, currency: "INR", discountPrice: 1999, trialDays: 2 },
+    isPublished: true,
+    instructorId: T1,
+    enrolled: 486,
+    rating: 4.8,
+    createdAt: iso(-120),
+  },
 ];
 
 /* ------------------------------------------------------------------ */
-/* MERN curriculum — full content                                      */
+/*  Module LaTeX sources                                               */
 /* ------------------------------------------------------------------ */
 
-const mernModules = (subjectId: string): ModuleDoc[] => [
+const L1 = String.raw`
+\section{The Language of Convergence}
+Analysis begins with one idea: \textbf{approximation you can control}. Calculus told you \emph{what} a limit is; analysis tells you exactly \emph{what that sentence means}.
+
+\begin{definition}[Limit of a sequence]
+We write $\lim_{n\to\infty} a_n = L$ if for every $\varepsilon > 0$ there exists $N \in \mathbb{N}$ such that
+\[ |a_n - L| < \varepsilon \quad \text{for all } n \ge N. \]
+\end{definition}
+
+Notice the order of the quantifiers: \textbf{for every} $\varepsilon$, \textbf{there exists} an $N$. The challenger picks $\varepsilon$ first; you must respond with an $N$ that works for \emph{all} later terms at once.
+
+\begin{example}
+Show that $\lim_{n\to\infty} \frac{n}{n+1} = 1$. Given $\varepsilon > 0$,
+\[ \left| \frac{n}{n+1} - 1 \right| = \frac{1}{n+1} < \frac{1}{n}. \]
+Choosing $N = \lceil 1/\varepsilon \rceil$ forces $\frac{1}{n} < \varepsilon$ for every $n \ge N$.
+\end{example}
+
+\begin{theorem}[Uniqueness of limits]
+If $\lim a_n = L$ and $\lim a_n = M$, then $L = M$.
+\end{theorem}
+
+\subsection{Why the quantifiers matter}
+The sequence $a_n = (-1)^n$ fails the definition for \emph{any} proposed limit: take $\varepsilon = 1/2$ and no $N$ can keep both $+1$ and $-1$ terms within $\varepsilon$ of a single point.
+`;
+
+const L2 = String.raw`
+\section{Continuity in the $\varepsilon$--$\delta$ Language}
+A function is continuous when \textbf{small changes in input force small changes in output} — and "$\text{small}$" must be quantified.
+
+\begin{definition}[$\varepsilon$--$\delta$ continuity]
+$f : \mathbb{R} \to \mathbb{R}$ is continuous at $c$ if for every $\varepsilon > 0$ there exists $\delta > 0$ such that
+\[ |x - c| < \delta \implies |f(x) - f(c)| < \varepsilon. \]
+\end{definition}
+
+\begin{example}
+For $f(x) = x^2$ at $c = 3$: if $|x - 3| < \delta \le 1$, then $|x + 3| < 7$, so
+\[ |x^2 - 9| = |x - 3|\,|x + 3| < 7\delta. \]
+Choose $\delta = \min\{1,\, \varepsilon/7\}$.
+\end{example}
+
+\begin{theorem}[Intermediate Value Theorem]
+If $f$ is continuous on $[a,b]$ and $f(a) < 0 < f(b)$, then there exists $c \in (a,b)$ with $f(c) = 0$.
+\end{theorem}
+
+\begin{remark}
+The IVT is why $\sqrt{2}$ \emph{must exist}: apply it to $f(x) = x^2 - 2$ on $[1,2]$. Completeness of $\mathbb{R}$ does the real work.
+\end{remark}
+`;
+
+const L3 = String.raw`
+\section{Differentiation and the Mean Value Theorem}
+The derivative is a limit — so everything from Module 01 applies.
+
+\begin{definition}
+$f$ is differentiable at $c$ when the limit
+\[ f'(c) = \lim_{h \to 0} \frac{f(c+h) - f(c)}{h} \]
+exists. Differentiability always implies continuity; the converse fails at $f(x) = |x|$, $c = 0$.
+\end{definition}
+
+\begin{theorem}[Rolle's Theorem]
+If $f$ is continuous on $[a,b]$, differentiable on $(a,b)$, and $f(a) = f(b)$, then some $c \in (a,b)$ satisfies $f'(c) = 0$.
+\end{theorem}
+
+\begin{theorem}[Mean Value Theorem]
+Under the same hypotheses, there exists $c \in (a,b)$ with
+\[ f'(c) = \frac{f(b) - f(a)}{b - a}. \]
+\end{theorem}
+
+\begin{corollary}
+If $f' = 0$ on an interval, then $f$ is constant there. This innocent statement is the engine behind the Fundamental Theorem of Calculus.
+\end{corollary}
+
+\begin{example}
+For any $x > 0$, apply the MVT to $\ln(1+x)$ on $[0,x]$: since $\frac{1}{1+x} \le \frac{1}{1+t} \le 1$ on the interval,
+\[ \frac{x}{1+x} \le \ln(1+x) \le x. \]
+\end{example}
+`;
+
+const L4 = String.raw`
+\section{The Riemann Integral}
+Area, made rigorous: slice, bound, refine.
+
+\begin{definition}[Riemann integrability]
+For a partition $P = \{x_0, \dots, x_n\}$ of $[a,b]$, let $U(f,P)$ and $L(f,P)$ be the upper and lower sums. Then $f$ is integrable when
+\[ \inf_P U(f,P) = \sup_P L(f,P), \]
+and the common value is $\int_a^b f$.
+\end{definition}
+
+\begin{theorem}[Fundamental Theorem of Calculus]
+If $f$ is continuous on $[a,b]$ and $F(x) = \int_a^x f(t)\,dt$, then $F'(x) = f(x)$ for every $x \in (a,b)$.
+\end{theorem}
+
+\subsection{Computing Riemann sums numerically}
+Midpoint sums converge surprisingly fast for smooth integrands:
+
+\begin{lstlisting}[language=Python]
+def riemann_midpoint(f, a, b, n=1000):
+    # midpoint rule: exact for linear f, O(1/n^2) error otherwise
+    h = (b - a) / n
+    total = 0.0
+    for i in range(n):
+        x = a + (i + 0.5) * h
+        total += f(x)
+    return h * total
+
+import math
+print(riemann_midpoint(math.sin, 0, math.pi))  # ~2.0000004
+\end{lstlisting}
+
+\begin{remark}
+Not every bounded function is Riemann integrable: the Dirichlet function $\mathbf{1}_{\mathbb{Q}}$ has $U = 1$ and $L = 0$ on \emph{every} subinterval. This failure motivates Module 08.
+\end{remark}
+`;
+
+const L5 = String.raw`
+\section{Sequences and Series of Functions}
+Pointwise convergence is too weak for analysis; \textbf{uniform} convergence is the right notion.
+
+\begin{definition}[Uniform convergence]
+$f_n \to f$ uniformly on $S$ if
+\[ \forall \varepsilon > 0\ \exists N\ \forall n \ge N\ \forall x \in S:\quad |f_n(x) - f(x)| < \varepsilon. \]
+The crucial difference: one $N$ serves every $x$ simultaneously.
+\end{definition}
+
+\begin{theorem}[Weierstrass M-test]
+If $|g_k(x)| \le M_k$ on $S$ and $\sum M_k < \infty$, then $\sum g_k$ converges uniformly (and absolutely) on $S$.
+\end{theorem}
+
+\begin{example}
+The series $\sum_{k=1}^{\infty} \frac{\sin(kx)}{k^2}$ converges uniformly on $\mathbb{R}$ by the M-test with $M_k = 1/k^2$, since $\sum 1/k^2 = \pi^2/6$.
+\end{example}
+
+\begin{corollary}
+Uniform limits of continuous functions are continuous. The classic counterexample $f_n(x) = x^n$ on $[0,1]$ converges pointwise to a discontinuous limit — and indeed the convergence is not uniform.
+\end{corollary}
+`;
+
+const L6 = String.raw`
+\section{Power Series and Taylor's Theorem}
+When can a function be \emph{reconstructed} from its derivatives at one point?
+
+\begin{theorem}[Taylor with Lagrange remainder]
+If $f$ is $(n+1)$-times differentiable on an interval about $a$, then
+\[ f(x) = \sum_{k=0}^{n} \frac{f^{(k)}(a)}{k!}(x-a)^k + R_n(x), \qquad R_n(x) = \frac{f^{(n+1)}(\xi)}{(n+1)!}(x-a)^{n+1} \]
+for some $\xi$ between $a$ and $x$.
+\end{theorem}
+
+\begin{example}
+For $e^x$ at $a = 0$, every derivative is $e^x \le e$ on $[0,1]$, so
+\[ e = \sum_{k=0}^{n} \frac{1}{k!} + R_n, \qquad |R_n| \le \frac{e}{(n+1)!} \to 0. \]
+Hence $e^x = \sum_{n=0}^{\infty} \frac{x^n}{n!}$ on all of $\mathbb{R}$.
+\end{example}
+
+\begin{definition}[Radius of convergence]
+For $\sum c_n x^n$, the number $R = 1/\limsup_{n\to\infty} |c_n|^{1/n}$ (possibly $0$ or $\infty$) such that the series converges absolutely for $|x| < R$ and diverges for $|x| > R$.
+\end{definition}
+
+\begin{remark}
+Inside its radius of convergence, a power series may be differentiated and integrated term by term — uniform convergence on compact subintervals justifies both.
+\end{remark}
+`;
+
+const L7 = String.raw`
+\section{Fourier Series}
+Periodic functions as superpositions of pure tones.
+
+\begin{definition}
+For $f$ of period $2\pi$, the Fourier coefficients are
+\[ c_n = \frac{1}{2\pi} \int_{-\pi}^{\pi} f(x)\, e^{-inx}\, dx, \qquad n \in \mathbb{Z}, \]
+and the formal series is $\sum_{n \in \mathbb{Z}} c_n e^{inx}$.
+\end{definition}
+
+\begin{example}[Square wave]
+For the odd square wave $f(x) = \mathrm{sgn}(\sin x)$, symmetry kills every cosine term and
+\[ f(x) \sim \frac{4}{\pi} \sum_{k=0}^{\infty} \frac{\sin\big((2k+1)x\big)}{2k+1}. \]
+\end{example}
+
+\begin{theorem}[Parseval's identity]
+For square-integrable $f$,
+\[ \frac{1}{2\pi}\int_{-\pi}^{\pi} |f(x)|^2\, dx = \sum_{n \in \mathbb{Z}} |c_n|^2. \]
+Energy in time equals energy in frequency.
+\end{theorem}
+
+\begin{remark}
+Parseval applied to the square wave evaluates $\sum_{k=0}^{\infty} \frac{1}{(2k+1)^2} = \frac{\pi^2}{8}$ — a result that is painful to obtain any other way.
+\end{remark}
+`;
+
+const L8 = String.raw`
+\section{Measure and the Lebesgue Integral}
+The Riemann integral slices the \emph{domain}; Lebesgue slices the \emph{range}.
+
+\begin{definition}[Lebesgue measure, informally]
+A set function $\mu$ on "reasonable" subsets of $\mathbb{R}$ with $\mu([a,b]) = b - a$, countable additivity
+\[ \mu\!\left(\bigcup_{k=1}^{\infty} E_k\right) = \sum_{k=1}^{\infty} \mu(E_k) \quad \text{for disjoint } E_k, \]
+and $\mu(\mathbb{Q}) = 0$.
+\end{definition}
+
+\begin{example}
+The Dirichlet function $\mathbf{1}_{\mathbb{Q}}$ has Lebesgue integral $0$ on $[0,1]$ — the rationals simply carry no measure. Here Lebesgue succeeds where Riemann fails.
+\end{example}
+
+\begin{theorem}[Dominated Convergence]
+If $f_n \to f$ pointwise and $|f_n| \le g$ with $\int g < \infty$, then
+\[ \lim_{n \to \infty} \int f_n \, d\mu = \int f \, d\mu. \]
+\end{theorem}
+
+\begin{remark}
+This single theorem is the workhorse of modern probability and PDE theory: it says exactly when limits may pass through integrals.
+\end{remark}
+`;
+
+const LA1 = String.raw`
+\section{Vector Spaces}
+Strip away coordinates and keep only structure.
+
+\begin{definition}[Vector space]
+A set $V$ with operations $+ : V \times V \to V$ and $\cdot : \mathbb{F} \times V \to V$ satisfying the eight axioms: for all $u, v, w \in V$ and $a, b \in \mathbb{F}$,
+\begin{itemize}
+\item $u + (v + w) = (u + v) + w$ and $u + v = v + u$,
+\item there exists $0 \in V$ with $v + 0 = v$, and every $v$ has $-v$,
+\item $a(bv) = (ab)v$ and $1v = v$,
+\item $a(u + v) = au + av$ and $(a + b)v = av + bv$.
+\end{itemize}
+\end{definition}
+
+\begin{example}
+Beyond $\mathbb{R}^n$: the space $\mathcal{P}$ of polynomials, $C[0,1]$ of continuous functions, and the solution set of $y'' + y = 0$ are all vector spaces. Linearity is everywhere.
+\end{example}
+
+\begin{theorem}
+Every vector space with $n$ linearly independent vectors and no $n+1$ independent ones has dimension $n$; any $n$ independent vectors form a basis.
+\end{theorem}
+`;
+
+const LA2 = String.raw`
+\section{Linear Maps and Matrices}
+Matrices are what linear maps look like once you choose coordinates.
+
+\begin{definition}
+$T : V \to W$ is linear when $T(au + bv) = aT(u) + bT(v)$ for all scalars $a, b$ and vectors $u, v$.
+\end{definition}
+
+\begin{theorem}[Rank–nullity]
+For $T : V \to W$ with $\dim V = n$,
+\[ \dim \ker T + \dim \mathrm{im}\, T = n. \]
+\end{theorem}
+
+\begin{example}
+For $T : \mathcal{P}_2 \to \mathcal{P}_2$ given by $T(p) = p'$, the kernel is the constants (dimension $1$) and the image is $\mathcal{P}_1$ (dimension $2$): $1 + 2 = 3$.
+\end{example}
+`;
+
+const LA3 = String.raw`
+\section{Eigenvalues and Diagonalization}
+Find the directions a map merely stretches.
+
+\begin{definition}
+$\lambda$ is an eigenvalue of $A \in \mathbb{R}^{n \times n}$ if some $v \ne 0$ satisfies $Av = \lambda v$; equivalently,
+\[ \det(A - \lambda I) = 0. \]
+\end{definition}
+
+\begin{example}
+For $A = \begin{pmatrix} 4 & 1 \\ 2 & 3 \end{pmatrix}$, the characteristic polynomial is $\lambda^2 - 7\lambda + 10 = (\lambda - 5)(\lambda - 2)$, so $\lambda_1 = 5$, $\lambda_2 = 2$ and $A$ is diagonalizable.
+\end{example}
+
+\begin{theorem}[Spectral theorem, real symmetric case]
+If $A = A^{\mathsf{T}}$, then $\mathbb{R}^n$ has an orthonormal basis of eigenvectors of $A$, and all eigenvalues are real.
+\end{theorem}
+`;
+
+const LA4 = String.raw`
+\section{Inner Product Spaces}
+Geometry returns: lengths, angles, orthogonality.
+
+\begin{definition}
+An inner product on $V$ is a map $\langle \cdot, \cdot \rangle : V \times V \to \mathbb{F}$ that is linear in the first argument, conjugate symmetric, and positive definite.
+\end{definition}
+
+\begin{theorem}[Cauchy–Schwarz]
+For all $u, v \in V$,
+\[ |\langle u, v \rangle| \le \|u\| \, \|v\|, \]
+with equality exactly when $u, v$ are linearly dependent.
+\end{theorem}
+
+\begin{remark}
+This module is still being typeset — check back after the next compile run.
+\end{remark}
+`;
+
+/* ------------------------------------------------------------------ */
+/*  Modules                                                            */
+/* ------------------------------------------------------------------ */
+
+interface ModSeed {
+  id: string;
+  courseId: string;
+  order: number;
+  title: string;
+  description: string;
+  estimatedMinutes: number;
+  latex: string;
+  draft?: boolean;
+  compile?: boolean;
+  quiz: Array<{ q: string; opts: string[]; correct: number; explain: string }>;
+}
+
+const quiz = (q: string, opts: string[], correct: number, explain: string) => ({ q, opts, correct, explain });
+
+const moduleSeeds: ModSeed[] = [
   {
-    _id: "mod_mern_1",
-    subject: subjectId,
-    order: 1,
-    title: "HTML & CSS Foundations",
-    desc: "Structure and style the web: semantic markup, the box model, Flexbox and Grid.",
-    lesson: `
-<p>Every app you will ever ship renders through two languages: <strong>HTML decides what things are</strong>, CSS decides <strong>how they look and where they live</strong>. This module builds the mental model you will reuse for the rest of the track.</p>
-
-<h3>1 · Semantic HTML is a contract</h3>
-<p>Screen readers, search engines and future-you all read your markup. Use elements that describe meaning, not appearance:</p>
-<pre><code>&lt;header&gt;
-  &lt;nav&gt; ... primary links ... &lt;/nav&gt;
-&lt;/header&gt;
-
-&lt;main&gt;
-  &lt;article&gt; ... the actual content ... &lt;/article&gt;
-  &lt;aside&gt; ... supporting content ... &lt;/aside&gt;
-&lt;/main&gt;
-
-&lt;footer&gt; ... &lt;/footer&gt;</code></pre>
-<ul>
-  <li><strong>&lt;div&gt; and &lt;span&gt;</strong> carry zero meaning — reach for them last, not first.</li>
-  <li>One <code>&lt;main&gt;</code> per page. Headings in order, no skipping levels.</li>
-  <li>Forms get <code>&lt;label for="..."&gt;</code> — always.</li>
-</ul>
-
-<h3>2 · Selectors &amp; specificity</h3>
-<p>When two rules fight, the browser computes a score: <strong>inline &gt; #id &gt; .class &gt; element</strong>.</p>
-<pre><code>nav a            /* 0-0-2  */
-.nav .link       /* 0-2-0  */
-#nav a           /* 1-0-1  ← wins */</code></pre>
-<p>Write selectors as flat as you can. If you need <code>!important</code>, treat it as a smoke alarm: it means something is burning elsewhere.</p>
-
-<h3>3 · The box model, settled once</h3>
-<p>Every element is a box of <strong>content + padding + border + margin</strong>. Put this at the top of every stylesheet and layout math becomes sane:</p>
-<pre><code>*, *::before, *::after {
-  box-sizing: border-box; /* width now includes padding + border */
-}</code></pre>
-
-<h3>4 · Flexbox &amp; Grid in one breath</h3>
-<ul>
-  <li><strong>Flexbox</strong> = one dimension. Toolbars, nav rows, card innards.</li>
-  <li><strong>Grid</strong> = two dimensions. Page scaffolding, card galleries.</li>
-</ul>
-<pre><code>.toolbar { display: flex; gap: 12px; align-items: center; }
-
-.gallery {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 16px;
-}</code></pre>
-
-<h3>5 · Responsive by default</h3>
-<p>Design mobile-first, then add complexity upwards with <code>min-width</code> queries. If a layout needs more than two breakpoints, the layout is the bug.</p>
-<pre><code>@media (min-width: 720px) {
-  .layout { grid-template-columns: 2fr 1fr; }
-}</code></pre>`,
+    id: "mod_c1", courseId: "crs_calc", order: 1, title: "Sequences & Limits",
+    description: "The ε–N definition, uniqueness of limits, and the quantifier discipline that powers all of analysis.",
+    estimatedMinutes: 55, latex: L1, compile: true,
     quiz: [
-      {
-        q: "Which element is the most semantic choice for a page's primary navigation links?",
-        opts: ["<div class=\"nav\">", "<nav>", "<section>", "<menu-links>"],
-        correct: 1,
-        explain: "<nav> tells browsers, screen readers and crawlers 'this is a navigation block', unlocking keyboard landmarks and SEO meaning that a styled <div> never gets.",
-      },
-      {
-        q: "With box-sizing: border-box, an element's declared width includes…",
-        opts: ["content only", "content + padding", "content + padding + border", "content + padding + border + margin"],
-        correct: 2,
-        explain: "border-box folds padding and border into the declared width, so a 300px card stays 300px no matter the padding. Margin is always outside the box.",
-      },
-      {
-        q: "Which layout system is one-dimensional — it works along a row OR a column?",
-        opts: ["CSS Grid", "Flexbox", "Floats", "Tables"],
-        correct: 1,
-        explain: "Flexbox distributes space along a single axis. Grid handles rows and columns simultaneously, which is why Grid suits page scaffolding.",
-      },
-      {
-        q: "Which selector has the HIGHEST specificity?",
-        opts: ["nav a", ".nav .link", "#nav a", "nav > a"],
-        correct: 2,
-        explain: "An #id (1-0-1) outranks any number of classes (0-2-0) or element selectors. Specificity compares inline, then ids, then classes, then elements.",
-      },
+      quiz(String.raw`What does $\lim_{n\to\infty} \frac{n}{n+1}$ equal?`, ["$0$", "$1$", "$\\infty$", "Does not exist"], 1, String.raw`Rewrite $\frac{n}{n+1} = 1 - \frac{1}{n+1}$; the correction term vanishes.`),
+      quiz("In the ε–N definition, who moves first?", ["You pick N, then ε is revealed", "ε is given first, then you find N", "Both are chosen simultaneously", "It depends on the sequence"], 1, "The definition is a game: for every ε > 0 the challenger chooses, you must produce a working N."),
+      quiz(String.raw`Why does $a_n = (-1)^n$ diverge?`, ["It is unbounded", "Terms stay distance 2 apart, so no ε < 1 works", "It has no subsequence", "It is not monotone"], 1, "For ε = 1/2, consecutive terms 1 and −1 can never both lie within ε of a single limit."),
     ],
-    task:
-      "Rebuild the layout we sketched in the live class: a sticky header with nav, a two-column main area (article + aside), and a footer. Rules: semantic tags for structure (no div-soup), one media query that stacks the columns below 720px, and border-box set globally. Paste your full HTML + CSS below, or a link to a live page.",
-    project: {
-      title: "Project 01 — Personal Profile Page",
-      description:
-        "Ship a polished single page about you: header with name + role, an About section, skills rendered as styled chips, a projects section with three cards laid out by CSS Grid, and a footer with links. Constraints: valid semantic HTML, zero frameworks, one breakpoint, readable contrast. Submit your code, or a hosted URL plus a 3-line note on the hardest layout decision you made.",
-    },
   },
   {
-    _id: "mod_mern_2",
-    subject: subjectId,
-    order: 2,
-    title: "JavaScript, From Zero to DOM",
-    desc: "The language under everything: scope, closures, arrays, and driving the page with events.",
-    lesson: `
-<p>HTML is the skeleton, CSS the skin — <strong>JavaScript is the nervous system</strong>. You do not need to know all of it; you need the 20% that shows up every single day.</p>
+    id: "mod_c2", courseId: "crs_calc", order: 2, title: "Continuity & ε–δ",
+    description: "δ as a function of ε, the Intermediate Value Theorem, and why completeness of ℝ is doing the work.",
+    estimatedMinutes: 60, latex: L2, compile: true,
+    quiz: [
+      quiz(String.raw`In the ε–δ definition of continuity at $c$, δ may depend on…`, ["ε only", "ε and the point c", "x", "nothing"], 1, "δ generally depends on both ε and the base point c — uniform continuity is the upgrade where δ depends on ε alone."),
+      quiz("The IVT requires which hypotheses on [a, b]?", ["Differentiability", "Continuity of f and a sign change", "Monotonicity", "Boundedness of f′"], 1, "Continuity on the closed interval plus f(a) < 0 < f(b) guarantees a root in (a, b)."),
+      quiz(String.raw`Why does $\sqrt{2}$ exist?`, ["By definition of rationals", "IVT applied to $x^2 - 2$ plus completeness of ℝ", "Because 1.414² ≈ 2", "By the Archimedean property"], 1, "x² − 2 goes from −1 to 2 on [1, 2]; the IVT needs ℝ to have no gaps."),
+    ],
+  },
+  {
+    id: "mod_c3", courseId: "crs_calc", order: 3, title: "Differentiation & the MVT",
+    description: "Rolle's theorem, the Mean Value Theorem, and the corollaries that quietly run calculus.",
+    estimatedMinutes: 65, latex: L3, compile: true,
+    quiz: [
+      quiz("Which statement is true?", ["Continuous ⇒ differentiable", "Differentiable ⇒ continuous", "Neither implies the other", "They are equivalent"], 1, String.raw`$f(x) = |x|$ is continuous at 0 but not differentiable there; differentiability is strictly stronger.`),
+      quiz("Rolle's theorem concludes…", [String.raw`$f'(c) = 0$ for some interior $c$`, "f has a maximum", "f is constant", "f′ exists everywhere"], 0, "With f(a) = f(b), the graph must turn around somewhere inside, giving a horizontal tangent."),
+      quiz(String.raw`The MVT gives $f'(c) = $…`, [String.raw`$\frac{f(b)-f(a)}{b-a}$`, String.raw`$\frac{f(a)-f(b)}{a+b}$`, String.raw`$\int_a^b f$`, "0"], 0, "Some tangent is parallel to the secant — the average rate of change is achieved instantaneously somewhere."),
+    ],
+  },
+  {
+    id: "mod_c4", courseId: "crs_calc", order: 4, title: "The Riemann Integral",
+    description: "Upper and lower sums, the Fundamental Theorem, and a Python midpoint-rule lab.",
+    estimatedMinutes: 75, latex: L4, compile: true,
+    quiz: [
+      quiz("A bounded f is Riemann integrable when…", ["f is continuous", "inf U(f, P) = sup L(f, P) over partitions", "f is monotone", "f has finitely many jumps"], 1, "That equality is the definition; continuity or monotonicity are sufficient conditions, not the definition."),
+      quiz("Why is the Dirichlet function not Riemann integrable on [0, 1]?", ["It is unbounded", "Every subinterval has sup 1 and inf 0, so U = 1, L = 0", "It is discontinuous at 0", "It is not periodic"], 1, "Rationals and irrationals are both dense, so every Riemann sum is trapped between 0 and 1."),
+      quiz("The midpoint rule with n subintervals has error…", [String.raw`$O(1/n)$`, String.raw`$O(1/n^2)$`, String.raw`$O(1/\sqrt{n})$`, "Exact for all f"], 1, "Midpoint (like trapezoid) is second-order for smooth integrands — doubling n quarters the error."),
+    ],
+  },
+  {
+    id: "mod_c5", courseId: "crs_calc", order: 5, title: "Uniform Convergence",
+    description: "Pointwise vs uniform, the Weierstrass M-test, and which properties survive limits.",
+    estimatedMinutes: 60, latex: L5, compile: true,
+    quiz: [
+      quiz(String.raw`$f_n(x) = x^n$ on $[0,1]$ converges…`, ["uniformly to 0", "pointwise, not uniformly, to a discontinuous limit", "not at all", "uniformly to 1"], 1, "The pointwise limit is 0 on [0, 1) and 1 at x = 1 — discontinuous, so convergence cannot be uniform."),
+      quiz("The M-test requires…", [String.raw`$|g_k| \le M_k$ with $\sum M_k < \infty$`, "Differentiability of each gₖ", "Monotone terms", "Compact domain only"], 0, "Comparison against a convergent numerical series forces uniform (and absolute) convergence."),
+      quiz("Uniform limits of continuous functions are…", ["Continuous", "Differentiable", "Bounded only", "Constant"], 0, "Continuity passes through uniform limits; differentiability does not — that needs uniform convergence of derivatives."),
+    ],
+  },
+  {
+    id: "mod_c6", courseId: "crs_calc", order: 6, title: "Power Series & Taylor",
+    description: "Taylor's theorem with remainder, radii of convergence, and term-by-term calculus.",
+    estimatedMinutes: 70, latex: L6, compile: true,
+    quiz: [
+      quiz(String.raw`The radius of convergence of $\sum \frac{x^n}{n!}$ is…`, ["1", "e", String.raw`$\infty$`, "0"], 2, String.raw`Ratio test: $\frac{1/(n+1)!}{1/n!} = \frac{1}{n+1} \to 0$, so the series converges for every x.`),
+      quiz("Inside its radius of convergence a power series may be…", ["Only evaluated", "Differentiated and integrated term by term", "Differentiated but not integrated", "Neither"], 1, "Uniform convergence on compact subintervals justifies both operations — and the radius stays the same."),
+      quiz(String.raw`The Lagrange remainder $R_n(x)$ involves…`, [String.raw`$f^{(n+1)}(\xi)$ for some $\xi$ between a and x`, String.raw`$f^{(n)}(a)$ only`, "an integral of f", "the radius of convergence"], 0, "Taylor's theorem pins the error to one unknown intermediate point ξ, exactly like the MVT."),
+    ],
+  },
+  {
+    id: "mod_c7", courseId: "crs_calc", order: 7, title: "Fourier Series",
+    description: "Fourier coefficients, the square wave, and Parseval's identity as an energy balance.",
+    estimatedMinutes: 70, latex: L7, compile: true,
+    quiz: [
+      quiz(String.raw`For real, odd $f$, the Fourier series contains…`, ["cosines only", "sines only", "both", "neither"], 1, "Odd × even (cosine) integrates to zero over a symmetric interval, killing every cosine coefficient."),
+      quiz("Parseval's identity equates…", ["∫|f|² with Σ|cₙ|²", "∫f with Σcₙ", "f(0) with Σcₙ", "‖f‖₁ with ‖c‖₁"], 0, "L² energy in the time domain equals ℓ² energy in the frequency domain — the Fourier transform is an isometry."),
+      quiz(String.raw`$\sum_{k=0}^{\infty} \frac{1}{(2k+1)^2}$ evaluates to…`, [String.raw`$\frac{\pi^2}{6}$`, String.raw`$\frac{\pi^2}{8}$`, String.raw`$\frac{\pi^2}{12}$`, String.raw`$\frac{\pi^2}{4}$`], 1, "Apply Parseval to the square wave: its coefficients are 4/(π(2k+1)), and the identity does the rest."),
+    ],
+  },
+  {
+    id: "mod_c8", courseId: "crs_calc", order: 8, title: "Toward Lebesgue",
+    description: "Why Riemann is not enough: measure zero, the Dirichlet function, and dominated convergence.",
+    estimatedMinutes: 50, latex: L8, compile: true,
+    quiz: [
+      quiz(String.raw`The Lebesgue integral of $\mathbf{1}_{\mathbb{Q}}$ on $[0,1]$ is…`, ["1", "0", "undefined", "1/2"], 1, "ℚ ∩ [0, 1] is countable, hence has measure zero — the function is 0 almost everywhere."),
+      quiz("Dominated convergence requires…", ["Uniform convergence", "Pointwise convergence plus an integrable dominating g", "Monotone convergence", "Continuity of the limit"], 1, String.raw`$|f_n| \le g$ with $\int g < \infty$ is the hypothesis that lets limits pass through the integral.`),
+      quiz("Lebesgue integration slices the…", ["Domain into intervals", "Range into level sets", "Boundary", "Graph into squares"], 1, "Measuring where f lands near each height — instead of where x lives — is what tames pathological functions."),
+    ],
+  },
+  {
+    id: "mod_la1", courseId: "crs_linalg", order: 1, title: "Vector Spaces",
+    description: "The eight axioms, examples beyond ℝⁿ, and why dimension is well-defined.",
+    estimatedMinutes: 50, latex: LA1, compile: true,
+    quiz: [
+      quiz("Which is NOT a vector space axiom?", ["Commutativity of +", "Existence of an inner product", "Distributivity of scalar multiplication", "Existence of additive inverses"], 1, "Inner products are extra geometric structure — a vector space needs only the eight linear axioms."),
+      quiz(String.raw`$\mathcal{P}_2$, polynomials of degree ≤ 2, has dimension…`, ["2", "3", "∞", "1"], 1, String.raw`$\{1, x, x^2\}$ is a basis — three vectors.`),
+      quiz("Any two bases of a finite-dimensional space…", ["Have different lengths", "Have the same number of elements", "Are orthogonal", "Span different sets"], 1, "That invariance is exactly what makes dimension well-defined."),
+    ],
+  },
+  {
+    id: "mod_la2", courseId: "crs_linalg", order: 2, title: "Linear Maps & Rank–Nullity",
+    description: "Kernels, images, and the dimension count that organizes every linear system.",
+    estimatedMinutes: 55, latex: LA2, compile: true,
+    quiz: [
+      quiz("Rank–nullity says…", [String.raw`$\dim\ker T + \dim\,\mathrm{im}\,T = \dim V$`, "rank = nullity", String.raw`$\det T = 0$`, "T is invertible"], 0, "Dimensions of kernel and image partition the dimension of the domain."),
+      quiz(String.raw`The kernel of $T(p) = p'$ on $\mathcal{P}_2$ is…`, ["All of P₂", "The constant polynomials", "{0}", "The linear polynomials"], 1, "Exactly the polynomials with zero derivative — the constants, a 1-dimensional kernel."),
+      quiz("A linear map is injective iff…", ["It is surjective", "Its kernel is {0}", "It has an eigenvalue", "Its matrix is square"], 1, "T(u) = T(v) implies T(u − v) = 0, so injectivity is precisely trivial kernel."),
+    ],
+  },
+  {
+    id: "mod_la3", courseId: "crs_linalg", order: 3, title: "Eigenvalues & Spectral Theory",
+    description: "Characteristic polynomials, diagonalization, and the real symmetric spectral theorem.",
+    estimatedMinutes: 65, latex: LA3, compile: true,
+    quiz: [
+      quiz(String.raw`λ is an eigenvalue of A exactly when…`, [String.raw`$\det(A - \lambda I) = 0$`, String.raw`$\det A = \lambda$`, String.raw`$A - \lambda I$ is invertible`, String.raw`$\mathrm{tr}\,A = \lambda$`], 0, String.raw`$Av = \lambda v$ has a nonzero solution iff $A - \lambda I$ is singular.`),
+      quiz("The spectral theorem applies to…", ["All square matrices", "Real symmetric matrices", "Invertible matrices", "Upper-triangular matrices"], 1, "Symmetry guarantees real eigenvalues and an orthonormal eigenbasis."),
+      quiz(String.raw`For $A = \begin{pmatrix} 4 & 1 \\ 2 & 3 \end{pmatrix}$, the eigenvalues are…`, ["5 and 2", "4 and 3", "7 and −2", "1 and 6"], 0, String.raw`$\lambda^2 - 7\lambda + 10$ factors as $(\lambda - 5)(\lambda - 2)$.`),
+    ],
+  },
+  {
+    id: "mod_la4", courseId: "crs_linalg", order: 4, title: "Inner Product Spaces",
+    description: "Cauchy–Schwarz, orthogonality, and Gram–Schmidt. Currently being typeset.",
+    estimatedMinutes: 60, latex: LA4, draft: true, compile: false,
+    quiz: [
+      quiz("Cauchy–Schwarz bounds…", ["|⟨u, v⟩| by ‖u‖‖v‖", "‖u + v‖ by ‖u‖ + ‖v‖", "‖u‖ by ⟨u, u⟩", "nothing"], 0, "It is the statement that makes angles between abstract vectors well-defined."),
+      quiz("Equality in Cauchy–Schwarz holds iff…", ["u = v", "u and v are linearly dependent", "u ⊥ v", "‖u‖ = ‖v‖"], 1, "One vector being a scalar multiple of the other is the equality case."),
+      quiz("Gram–Schmidt produces…", ["Eigenvalues", "An orthonormal basis of the same span", "A diagonal matrix", "The determinant"], 1, "It orthogonalizes any basis step by step without changing the space spanned."),
+    ],
+  },
+];
 
-<h3>1 · let, const and scope</h3>
-<p>Use <code>const</code> by default and <code>let</code> when reassignment is genuine. Both are <strong>block-scoped</strong>, unlike the old <code>var</code>:</p>
-<pre><code>const cohort = "Cohort 6";
-let score = 0;
-score = score + 10;   // reassignment fine
-// cohort = "X";      // TypeError — binding is fixed</code></pre>
-
-<h3>2 · Functions &amp; closures</h3>
-<p>A closure is a function that <strong>remembers the variables from where it was born</strong>, even after that outer function has returned:</p>
-<pre><code>function counter() {
-  let n = 0;
-  return function () {
-    n = n + 1;
-    return n;
+function buildModule(s: ModSeed): CourseModule {
+  const compiled = s.compile ? latexToHtml(s.latex) : null;
+  return {
+    _id: s.id,
+    courseId: s.courseId,
+    order: s.order,
+    title: s.title,
+    description: s.description,
+    contentType: "lesson",
+    content: compiled
+      ? {
+          latexSource: s.latex.trim(),
+          compiledHtml: compiled.html,
+          compiledAt: iso(-3),
+          status: "compiled",
+          warnings: compiled.warnings,
+        }
+      : { latexSource: s.latex.trim(), compiledHtml: "", compiledAt: null, status: "uncompiled", warnings: [] },
+    isDraft: !!s.draft,
+    estimatedMinutes: s.estimatedMinutes,
+    quiz: s.quiz,
   };
 }
-const tick = counter();
-tick(); // 1
-tick(); // 2  — n survived inside the closure</code></pre>
-<p>Closures power callbacks, event handlers, and every React hook you will meet later.</p>
 
-<h3>3 · Arrays: the big three</h3>
-<ul>
-  <li><code>map</code> — transform every item into a <strong>new array</strong>.</li>
-  <li><code>filter</code> — keep items that pass a test, <strong>new array</strong>.</li>
-  <li><code>reduce</code> — fold the array into <strong>one value</strong>.</li>
-</ul>
-<pre><code>const prices = [120, 40, 300];
-const withVat  = prices.map(p => p * 1.075);
-const big      = prices.filter(p => p > 100);
-const total    = prices.reduce((sum, p) => sum + p, 0);</code></pre>
-<p>All three leave the original array untouched. <code>push</code>, <code>sort</code> and <code>splice</code> mutate — know the difference.</p>
+const modules: CourseModule[] = moduleSeeds.map(buildModule);
 
-<h3>4 · The DOM &amp; event delegation</h3>
-<pre><code>const list = document.querySelector("#list");
+/* ------------------------------------------------------------------ */
+/*  Students, payments, live classes                                   */
+/* ------------------------------------------------------------------ */
 
-list.addEventListener("click", (e) => {
-  const item = e.target.closest("li");
-  if (!item) return;
-  item.classList.toggle("done");
-});</code></pre>
-<p>One listener on the parent handles every child — even ones added later. That is <strong>event delegation</strong>, and it works because events <strong>bubble</strong> up the tree.</p>`,
-    quiz: [
-      {
-        q: "function outer() { let n = 10; return function () { return n + 5; }; } — what does outer()() log?",
-        opts: ["undefined", "10", "15", "ReferenceError"],
-        correct: 2,
-        explain: "The inner function closes over n. When it is finally called, n is still alive inside the closure, so 10 + 5 = 15.",
-      },
-      {
-        q: "Which array method returns a NEW array without mutating the original?",
-        opts: ["push()", "map()", "sort()", "splice()"],
-        correct: 1,
-        explain: "map builds and returns a fresh array. push, sort and splice all modify the array they are called on.",
-      },
-      {
-        q: "What is true about const?",
-        opts: [
-          "It creates a block-scoped binding that cannot be reassigned",
-          "It is function-scoped like var",
-          "It makes objects deeply immutable",
-          "There is no difference vs let",
-        ],
-        correct: 0,
-        explain: "const fixes the binding, not the value: a const object can still have its properties changed. It is block-scoped, like let.",
-      },
-      {
-        q: "Event delegation works because…",
-        opts: [
-          "events bubble up the DOM tree",
-          "listeners are cached by the engine",
-          "the DOM is a linked list",
-          "browsers batch timers",
-        ],
-        correct: 0,
-        explain: "A click on a child bubbles through every ancestor, so one ancestor listener can handle all descendants — including future ones.",
-      },
-    ],
-    task:
-      "Write two functions: rangeSum(start, end) that returns the sum of all integers between start and end inclusive, and debounce(fn, ms) that delays invoking fn until ms milliseconds of silence. Paste your code plus one example call and its output for each.",
-    project: {
-      title: "Project 02 — Kanban-lite Task Board (vanilla JS)",
-      description:
-        "Build a board with three columns (Todo / Doing / Done). Users add tasks from an input, move them between columns with buttons (no drag library), delete them, and everything persists in localStorage across reloads. Vanilla JS only — no frameworks. Submit a link or the full JS file, and note which array method did the most work for you.",
-    },
-  },
-  {
-    _id: "mod_mern_3",
-    subject: subjectId,
-    order: 3,
-    title: "REST APIs with Node & Express",
-    desc: "Servers, routes, middleware and status codes — the API layer every MERN app hangs on.",
-    lesson: `
-<p>The <strong>N</strong> and the <strong>E</strong> of MERN. Node runs JavaScript outside the browser; Express gives it a minimal routing layer. Together they turn a laptop into an API server in about twenty lines.</p>
-
-<h3>1 · The smallest real server</h3>
-<pre><code>const express = require("express");
-const app = express();
-
-app.use(express.json()); // middleware: parse JSON bodies
-
-app.get("/api/health", (req, res) => {
-  res.json({ ok: true });
-});
-
-app.listen(process.env.PORT || 5000);</code></pre>
-
-<h3>2 · Routes, params, query</h3>
-<pre><code>GET /api/students/42?full=true
-
-// inside the handler:
-req.params.id    // "42"    — path segment, identifies ONE resource
-req.query.full   // "true"  — filters and options</code></pre>
-<ul>
-  <li><code>:id</code> segments → <strong>which</strong> resource.</li>
-  <li>Query strings → <strong>how</strong> to shape the response.</li>
-</ul>
-
-<h3>3 · Middleware runs top-to-bottom</h3>
-<p>Every <code>app.use(fn)</code> joins a pipeline. Order matters — <code>express.json()</code> must run <strong>before</strong> any route that reads <code>req.body</code>.</p>
-<pre><code>// tiny logger middleware
-app.use((req, res, next) => {
-  console.log(req.method, req.path);
-  next(); // hand control to the next in line
-});</code></pre>
-
-<h3>4 · Status codes you will actually use</h3>
-<ul>
-  <li><code>200</code> OK · <code>201</code> Created · <code>204</code> No Content (delete)</li>
-  <li><code>400</code> Bad Request (validation) · <code>404</code> Not Found</li>
-  <li><code>500</code> Server Error — the bug is yours, not the client's</li>
-</ul>
-<p>A good API answers every request with a truthful code and a JSON body. That contract is what lets a React front end trust it blindly.</p>`,
-    quiz: [
-      {
-        q: "Which middleware parses incoming JSON request bodies?",
-        opts: ["express.urlencoded()", "express.json()", "cors()", "app.static()"],
-        correct: 1,
-        explain: "express.json() reads the raw body and populates req.body with parsed JSON. Register it before routes that need req.body.",
-      },
-      {
-        q: "In the route /api/students/:id, req.params.id holds…",
-        opts: ["the query string", "the URL path segment after /students/", "a field from the body", "a request header"],
-        correct: 1,
-        explain: "Named :segments in the path land in req.params. The query string lives in req.query, body in req.body.",
-      },
-      {
-        q: "The most correct status for 'resource created successfully' is…",
-        opts: ["200", "201", "204", "301"],
-        correct: 1,
-        explain: "201 Created signals a new resource came into existence, usually with the created document in the body. 204 is for operations with nothing to return.",
-      },
-      {
-        q: "Express middleware runs…",
-        opts: [
-          "in registration order, top to bottom",
-          "alphabetically by name",
-          "in random order per request",
-          "only on error",
-        ],
-        correct: 0,
-        explain: "The pipeline executes in the order you registered it, which is why body parsers and loggers must be app.use'd before your routes.",
-      },
-    ],
-    task:
-      "Spin up an Express server exposing GET /api/quotes (list), GET /api/quotes/:id and POST /api/quotes against an in-memory array. Paste your server.js and the three curl commands (or fetch snippets) you used to test it, plus one 404 response you triggered on purpose.",
-    project: {
-      title: "Project 03 — Notes API",
-      description:
-        "Full CRUD on /api/notes backed by an in-memory array: list, read one, create (title required → else 400), update, delete (204). Every response is JSON; unknown ids return 404 with a message. Submit server.js plus a table of the endpoints you implemented with one sample request/response pair each.",
-    },
-  },
-  {
-    _id: "mod_mern_4",
-    subject: subjectId,
-    order: 4,
-    title: "MongoDB & Mongoose",
-    desc: "Documents, ObjectIds, schemas and queries — persistence that scales with your API.",
-    lesson: `
-<p>The <strong>M</strong> in MERN. MongoDB stores <strong>JSON-like documents</strong> in collections — no tables, no fixed columns. Mongoose layers schemas, validation and relations on top.</p>
-
-<h3>1 · Documents, not rows</h3>
-<pre><code>{
-  "_id": "65f2b1c9d8e7a6b5c4d3e2f1",
-  "name": "Aisha",
-  "subject": "65f2a0...",   // reference to another document
-  "scores": [88, 91, 76]     // arrays live INSIDE the document
-}</code></pre>
-<ul>
-  <li><strong>_id</strong> is an ObjectId: it embeds a <strong>timestamp</strong> plus randomness — sortable by creation time.</li>
-  <li>Embed what you read together; reference what grows without bound.</li>
-</ul>
-
-<h3>2 · Schemas are enforced by your app</h3>
-<p>MongoDB itself is schemaless — <strong>Mongoose</strong> is what gives you shape and validation:</p>
-<pre><code>const StudentSchema = new Schema({
-  name:    { type: String, required: true, trim: true },
-  subject: { type: Schema.Types.ObjectId, ref: "Subject", required: true },
-});
-const Student = model("Student", StudentSchema);</code></pre>
-
-<h3>3 · Queries read like JSON</h3>
-<pre><code>await Student.find({ score: { $gte: 80 } });
-await Student.findOne({ name: "Aisha" });
-await Student.findByIdAndUpdate(id, { score: 92 }, { new: true });</code></pre>
-
-<h3>4 · Relations with populate()</h3>
-<pre><code>const s = await Student.findById(id).populate("subject");
-// s.subject is now the FULL Subject document,
-// not just the ObjectId</code></pre>
-<p>Add a <strong>compound unique index</strong> when a pair must be unique — like <code>(name, subject)</code> in this very app — so duplicates fail at the database level, not in your code.</p>`,
-    quiz: [
-      {
-        q: "A Mongoose Schema is best described as…",
-        opts: [
-          "a law enforced inside the database engine",
-          "a shape + validation layer enforced by your app's model layer",
-          "an index definition",
-          "a transaction boundary",
-        ],
-        correct: 1,
-        explain: "MongoDB itself will happily store any document. Mongoose validates against the schema in your application before anything touches the database.",
-      },
-      {
-        q: "An ObjectId embeds…",
-        opts: [
-          "a timestamp plus randomness",
-          "a UUID v4",
-          "an auto-increment integer",
-          "a hash of the document contents",
-        ],
-        correct: 0,
-        explain: "The first bytes of an ObjectId are a creation timestamp, which is why sorting by _id sorts by insertion time.",
-      },
-      {
-        q: "Which query finds all students with score >= 80?",
-        opts: [
-          "find({ score: { $gte: 80 } })",
-          "find({ score: \">=80\" })",
-          "where(\"score>=80\")",
-          "filter(score > 80)",
-        ],
-        correct: 0,
-        explain: "Mongo query operators are $-prefixed keys inside the filter object: $gte, $lte, $in, $ne and friends.",
-      },
-      {
-        q: "populate(\"subject\") on a query result…",
-        opts: [
-          "replaces the stored ObjectId with the full referenced document",
-          "creates the Subject collection",
-          "deletes orphaned references",
-          "caches the query in memory",
-        ],
-        correct: 0,
-        explain: "populate performs the join at query time: your Student comes back carrying the actual Subject document where the id used to be.",
-      },
-    ],
-    task:
-      "Design two Mongoose schemas for a tiny Library: Book (title, author, year, tags[]) and Loan (book ref, student ref, borrowedOn, returnedOn). Paste both schema files, then write one query: all books tagged 'dsa', sorted by year descending.",
-    project: {
-      title: "Project 04 — Notes API, Wired to MongoDB",
-      description:
-        "Take your Project 03 Notes API and replace the in-memory array with a Mongoose Note model. Connect via MONGODB_URI from .env, add required + trim validation, and return proper 400/404s. Submit your schema file, a .env.example, and the updated route handlers — plus the line of code you are most proud of and why.",
-    },
-  },
-  {
-    _id: "mod_mern_5",
-    subject: subjectId,
-    order: 5,
-    title: "Ship It — Deploy & Go Live",
-    desc: "Env vars, CORS, build pipelines and the checklist that turns a localhost app into a live product.",
-    lesson: `
-<p>An app on localhost is a prototype. This module is the bridge to <strong>a URL you can send someone</strong> — the exact pipeline this training hub runs on.</p>
-
-<h3>1 · Two worlds: dev vs build</h3>
-<ul>
-  <li><strong>Frontend:</strong> <code>npm run build</code> produces a static <code>dist/</code> folder — HTML, JS, CSS. Host it anywhere static (Vercel, Netlify).</li>
-  <li><strong>Backend:</strong> a Node process. Host it where a process can stay alive (Render, Railway) and give it a real database (MongoDB Atlas).</li>
-</ul>
-
-<h3>2 · Secrets live in env vars</h3>
-<pre><code># .env — NEVER committed to git
-MONGODB_URI=mongodb+srv://...
-TRAINER_PASSCODE=...
-CLIENT_ORIGIN=https://my-app.vercel.app</code></pre>
-<p>Code reads <code>process.env.X</code>. Commit a <code>.env.example</code> with empty values instead.</p>
-
-<h3>3 · CORS is the browser's bouncer</h3>
-<p>Browsers block cross-origin requests unless the server opts in. Restrict the allowed origin to your deployed frontend only:</p>
-<pre><code>app.use(cors({ origin: process.env.CLIENT_ORIGIN }));</code></pre>
-
-<h3>4 · The go-live checklist</h3>
-<ul>
-  <li>Add <code>GET /api/health</code> → <code>{ ok: true }</code> so the host can probe liveness.</li>
-  <li>Listen on <code>process.env.PORT</code> — the host chooses the port, not you.</li>
-  <li>Smoke-test every endpoint against the live URL, not localhost.</li>
-  <li>Watch the logs for the first hour. Something always surprises you.</li>
-  <li>Open the app on a phone. Fix whatever breaks. Something will.</li>
-</ul>`,
-    quiz: [
-      {
-        q: "Which file must NEVER be committed to git?",
-        opts: [".env", ".gitignore", "package.json", "README.md"],
-        correct: 0,
-        explain: ".env holds secrets (DB URI, passcodes). Commit a .env.example with the keys and empty values so teammates know what to fill in.",
-      },
-      {
-        q: "CORS exists so that…",
-        opts: [
-          "browsers restrict cross-origin requests by default",
-          "servers respond faster",
-          "URLs stay short and clean",
-          "cookies are encrypted",
-        ],
-        correct: 0,
-        explain: "Same-origin policy is the browser's default: a page can't call a different origin unless that origin explicitly allows it via CORS headers.",
-      },
-      {
-        q: "process.env.PORT is…",
-        opts: [
-          "always 3000",
-          "provided by the hosting environment",
-          "required by Express",
-          "the frontend's dev port",
-        ],
-        correct: 1,
-        explain: "Platforms like Render assign a port and pass it in PORT. app.listen(process.env.PORT || 5000) works on the host and on your laptop.",
-      },
-      {
-        q: "A /health endpoint is there to…",
-        opts: [
-          "let the hosting platform probe that the app is alive",
-          "store application logs",
-          "reset the database safely",
-          "serve the frontend bundle",
-        ],
-        correct: 0,
-        explain: "Orchestrators poll a cheap endpoint to decide if your instance is healthy enough to receive traffic. Keep it dependency-light.",
-      },
-    ],
-    task:
-      "Write the deploy checklist you would run for this very app — at least 10 items, grouped into before-you-push, while-deploying, and after-going-live. Be specific enough that a stranger could execute it.",
-    project: {
-      title: "Capstone — A Deployed MERN App",
-      description:
-        "Ship a complete stack: React frontend + Express API + MongoDB Atlas, live at a public URL. Build the notes app end-to-end or propose your own idea in one sentence first. Both sides configured via env vars, CORS locked to your frontend origin, health endpoint included. Submit the live URL + repo link, and a short write-up of what broke during deploy and exactly how you fixed it.",
-    },
-  },
+const students: StudentRec[] = [
+  { _id: "stu_priya", name: "Priya Sharma", email: "priya@example.com", courseId: "crs_calc", enrollmentDate: iso(0, 7), status: "trial", trialStart: iso(0, 7), trialEnd: new Date(now + 43 * 3600000).toISOString(), paymentStatus: "pending", progress: { completed: ["mod_c1"], quizScores: { mod_c1: 100 } }, moduleVisibility: {}, lastActive: iso(0, 9) },
+  { _id: "stu_amara", name: "Amara Okafor", email: "amara@example.com", courseId: "crs_calc", enrollmentDate: iso(-1, 6), status: "trial", trialStart: new Date(now - 30 * 3600000).toISOString(), trialEnd: new Date(now + 18 * 3600000).toISOString(), paymentStatus: "pending", progress: { completed: ["mod_c1", "mod_c2"], quizScores: { mod_c1: 100, mod_c2: 67 } }, moduleVisibility: {}, lastActive: iso(0, 8) },
+  { _id: "stu_arjun", name: "Arjun Mehta", email: "arjun@example.com", courseId: "crs_calc", enrollmentDate: iso(-55), status: "active", trialStart: iso(-55), trialEnd: iso(-53), paymentStatus: "completed", progress: { completed: ["mod_c1", "mod_c2", "mod_c3", "mod_c4", "mod_c5", "mod_c6"], quizScores: { mod_c1: 100, mod_c2: 100, mod_c3: 67, mod_c4: 100, mod_c5: 67, mod_c6: 100 } }, moduleVisibility: {}, lastActive: iso(-1) },
+  { _id: "stu_sofia", name: "Sofia Reyes", email: "sofia@example.com", courseId: "crs_calc", enrollmentDate: iso(-38), status: "active", trialStart: iso(-38), trialEnd: iso(-36), paymentStatus: "completed", progress: { completed: ["mod_c1", "mod_c2", "mod_c3"], quizScores: { mod_c1: 67, mod_c2: 100, mod_c3: 100 } }, moduleVisibility: { mod_c7: false }, lastActive: iso(0, 6) },
+  { _id: "stu_chen", name: "Chen Wei", email: "chen@example.com", courseId: "crs_calc", enrollmentDate: iso(-9), status: "expired", trialStart: iso(-9), trialEnd: iso(-7), paymentStatus: "pending", progress: { completed: ["mod_c1", "mod_c2"], quizScores: { mod_c1: 100, mod_c2: 67 } }, moduleVisibility: {}, lastActive: iso(-6) },
+  { _id: "stu_dmitri", name: "Dmitri Volkov", email: "dmitri@example.com", courseId: "crs_calc", enrollmentDate: iso(-20), status: "blocked", trialStart: iso(-20), trialEnd: iso(-18), paymentStatus: "failed", progress: { completed: ["mod_c1"], quizScores: { mod_c1: 33 } }, moduleVisibility: {}, lastActive: iso(-12) },
+  { _id: "stu_ravi", name: "Ravi Patel", email: "ravi@example.com", courseId: "crs_calc", enrollmentDate: iso(-130), status: "active", trialStart: iso(-130), trialEnd: iso(-128), paymentStatus: "completed", progress: { completed: ["mod_c1", "mod_c2", "mod_c3", "mod_c4", "mod_c5", "mod_c6", "mod_c7", "mod_c8"], quizScores: { mod_c1: 100, mod_c2: 100, mod_c3: 100, mod_c4: 67, mod_c5: 100, mod_c6: 100, mod_c7: 67, mod_c8: 100 } }, moduleVisibility: {}, lastActive: iso(-4) },
+  { _id: "stu_meera", name: "Meera Iyer", email: "meera@example.com", courseId: "crs_calc", enrollmentDate: iso(-92), status: "active", trialStart: iso(-92), trialEnd: iso(-90), paymentStatus: "completed", progress: { completed: ["mod_c1", "mod_c2", "mod_c3", "mod_c4", "mod_c5"], quizScores: { mod_c1: 100, mod_c2: 67, mod_c3: 100, mod_c4: 100, mod_c5: 100 } }, moduleVisibility: {}, lastActive: iso(-2) },
+  { _id: "stu_lena", name: "Lena Fischer", email: "lena@example.com", courseId: "crs_linalg", enrollmentDate: iso(-21), status: "active", trialStart: iso(-21), trialEnd: iso(-19), paymentStatus: "completed", progress: { completed: ["mod_la1", "mod_la2"], quizScores: { mod_la1: 100, mod_la2: 100 } }, moduleVisibility: {}, lastActive: iso(-1) },
+  { _id: "stu_tomas", name: "Tomás Silva", email: "tomas@example.com", courseId: "crs_linalg", enrollmentDate: iso(-6), status: "expired", trialStart: iso(-6), trialEnd: iso(-4), paymentStatus: "pending", progress: { completed: ["mod_la1"], quizScores: { mod_la1: 67 } }, moduleVisibility: {}, lastActive: iso(-5) },
 ];
 
-/* ------------------------------------------------------------------ */
-/* Placeholder tracks                                                  */
-/* ------------------------------------------------------------------ */
-
-interface PlaceholderTrack {
-  name: string;
-  slug: string;
-  mods: Array<{ t: string; d: string }>;
-  bank: QuizQ[];
-}
-
-const TRACKS: PlaceholderTrack[] = [
-  {
-    name: "Data Science with Python",
-    slug: "data-science",
-    mods: [
-      { t: "NumPy & Pandas Foundations", d: "Arrays, Series and DataFrames — the tables under every analysis." },
-      { t: "Data Cleaning & Wrangling", d: "Missing values, duplicates, merges and reshaping messy reality." },
-      { t: "Visualization & Storytelling", d: "Matplotlib, Seaborn and choosing the honest chart." },
-    ],
-    bank: [
-      { q: "Which library is purpose-built for labelled, tabular data?", opts: ["NumPy", "Pandas", "Matplotlib", "SciPy"], correct: 1, explain: "Pandas' DataFrame is a labelled table with column names and an index — the default home for CSVs and SQL results." },
-      { q: "df.dropna() returns…", opts: ["a new object with missing values removed", "nothing — it errors", "a sorted DataFrame", "the DataFrame schema"], correct: 0, explain: "By default dropna returns a new object with NaN rows dropped; pass inplace=True to mutate instead." },
-      { q: "Best chart to show the distribution of one numeric column?", opts: ["Pie chart", "Histogram", "Line chart", "Heatmap"], correct: 1, explain: "A histogram buckets one numeric variable so you can see shape, skew and outliers at a glance." },
-      { q: "np.array differs from a Python list because it is…", opts: ["fixed-type and vectorized", "always slower", "unable to hold numbers", "immutable in every case"], correct: 0, explain: "NumPy arrays store one dtype contiguously, so whole-array math runs in C without Python loops." },
-    ],
-  },
-  {
-    name: "Machine Learning",
-    slug: "machine-learning",
-    mods: [
-      { t: "ML Thinking & Scikit-Learn", d: "Frames, pipelines and the fit/predict contract." },
-      { t: "Supervised Learning Models", d: "Regression, classification, trees and neighbours." },
-      { t: "Evaluation & Tuning", d: "Metrics that tell the truth, and search that finds the knobs." },
-    ],
-    bank: [
-      { q: "Great on training data, poor on unseen data. This is…", opts: ["underfitting", "overfitting", "regularization", "data leakage"], correct: 1, explain: "The model memorized the training set instead of learning the pattern — holdout data exposes it." },
-      { q: "Which of these is a supervised task?", opts: ["Clustering", "Classification", "Dimensionality reduction", "Market-basket mining"], correct: 1, explain: "Supervised learning maps inputs to known labels; classification predicts a category label." },
-      { q: "Why split into train and test sets?", opts: ["to estimate generalization to unseen data", "to make training faster", "to reduce the number of features", "to remove NaNs"], correct: 0, explain: "The test set is never seen during training, so its score is an honest estimate of real-world performance." },
-      { q: "A loss function…", opts: ["scores how wrong predictions are so training can minimize it", "compresses the dataset", "selects features automatically", "prevents overfitting by itself"], correct: 0, explain: "Training is optimization: the loss quantifies error and gradient descent walks it downhill." },
-    ],
-  },
-  {
-    name: "Java Programming",
-    slug: "java",
-    mods: [
-      { t: "Java Syntax & OOP", d: "Classes, objects, inheritance and the JVM contract." },
-      { t: "Collections & Generics", d: "List, Map, Set and type-safe containers." },
-      { t: "Streams, Files & Exceptions", d: "Modern data pipelines and failing gracefully." },
-    ],
-    bank: [
-      { q: "Java source code compiles to…", opts: ["machine code directly", "bytecode executed by the JVM", "JavaScript", "CIL for .NET only"], correct: 1, explain: "javac emits bytecode; the JVM interprets/JITs it — which is what makes Java portable across platforms." },
-      { q: "Which keyword stops a class from being extended?", opts: ["static", "final", "private", "abstract"], correct: 1, explain: "A final class cannot be subclassed; final methods cannot be overridden; final variables cannot be reassigned." },
-      { q: "ArrayList vs LinkedList: the practical difference is…", opts: ["ArrayList is array-backed with O(1) index access", "LinkedList is faster for reads by index", "they are interchangeable", "ArrayList cannot grow"], correct: 0, explain: "ArrayList gives constant-time positional reads; LinkedList pays O(n) to index but inserts cheaply mid-list." },
-      { q: "Which of these is NOT a primitive type?", opts: ["int", "boolean", "String", "double"], correct: 2, explain: "String is a full class in java.lang; int, boolean and double are the eight primitives." },
-    ],
-  },
-  {
-    name: "Agentic AI",
-    slug: "agentic-ai",
-    mods: [
-      { t: "LLM Primitives & Prompting", d: "Tokens, context windows and instructions that stick." },
-      { t: "Tools, Memory & Planning", d: "Giving a model hands: function calls, stores and plans." },
-      { t: "Building Agent Loops", d: "Observe → think → act, safely, until the job is done." },
-    ],
-    bank: [
-      { q: "What separates an agent from a single chat completion?", opts: ["a loop of plan → act → observe with tools", "a bigger model", "streaming responses", "temperature set to zero"], correct: 0, explain: "Agency is the loop: the model acts on the world, observes results, and decides the next step." },
-      { q: "The ReAct pattern interleaves…", opts: ["reasoning and acting", "reads and writes", "requests and caching", "ranking and filtering"], correct: 0, explain: "ReAct alternates chain-of-thought reasoning with tool actions, letting each inform the other." },
-      { q: "Tool-calling means…", opts: ["the model emits structured calls your code executes", "the model runs Python by itself", "tools run the model", "the API caches results"], correct: 0, explain: "The model outputs a JSON call signature; YOUR runtime executes the function and feeds the result back." },
-      { q: "The context window is…", opts: ["the token budget covering prompt plus output", "the server's RAM", "the vector database", "GPU memory"], correct: 0, explain: "Everything — system prompt, history, tool results, reply — must fit inside the window, so agents need memory strategies." },
-    ],
-  },
-  {
-    name: "Generative AI",
-    slug: "generative-ai",
-    mods: [
-      { t: "How Generative Models Work", d: "Tokens, probabilities and why next-word prediction gets smart." },
-      { t: "Prompt Engineering & RAG", d: "Instructions, few-shots and grounding answers in your data." },
-      { t: "Shipping GenAI Features", d: "Latency, cost, evals and guardrails in production." },
-    ],
-    bank: [
-      { q: "Temperature controls…", opts: ["the randomness of sampled output", "response speed", "API cost", "context length"], correct: 0, explain: "Higher temperature flattens the probability curve and yields more surprising tokens; near zero is near-deterministic." },
-      { q: "RAG stands for…", opts: ["Retrieval-Augmented Generation", "Rapid Agent Graphs", "Recursive Alignment Gradients", "Real-time API Gateway"], correct: 0, explain: "RAG retrieves relevant documents and injects them into the prompt, grounding answers in your own data." },
-      { q: "A token is roughly…", opts: ["a chunk of text the model processes as one unit", "always exactly one word", "one byte", "one sentence"], correct: 0, explain: "Common words map to one token; long or rare words split into several. Pricing and limits are measured in tokens." },
-      { q: "'Hallucination' means the model…", opts: ["produces confident but unsupported or incorrect output", "renders GPU artifacts", "is being prompt-injected", "hit a rate limit"], correct: 0, explain: "Fluent ≠ true. Grounding (RAG), citations and evals are the engineering answers to hallucination." },
-    ],
-  },
-  {
-    name: "Python Programming",
-    slug: "python",
-    mods: [
-      { t: "Python Basics & Control Flow", d: "Types, conditions, loops and the Pythonic style." },
-      { t: "Functions, Modules & Files", d: "Small reusable pieces and reading/writing the real world." },
-      { t: "OOP & Mini Projects", d: "Classes that earn their keep, glued into real scripts." },
-    ],
-    bank: [
-      { q: "Which of these types is immutable?", opts: ["list", "dict", "tuple", "set"], correct: 2, explain: "A tuple can't be changed after creation — handy for fixed records and dictionary keys." },
-      { q: "In def f(x=3), the x=3 part is…", opts: ["a default parameter value", "a keyword-only marker", "a global variable", "a type hint"], correct: 0, explain: "Callers may omit x and get 3. Default values are evaluated once, at definition time — a classic Python gotcha." },
-      { q: "d['k'] differs from d.get('k') because…", opts: ["d['k'] raises KeyError when missing; .get returns None", "they are identical", ".get is always faster", "d['k'] creates the key"], correct: 0, explain: ".get softens the miss — and accepts a fallback: d.get('k', 0)." },
-      { q: "Which of these values is falsy?", opts: ["0", "\"0\"", "[0]", "\"None\""], correct: 0, explain: "Zero, empty containers, None and empty strings are falsy. The string \"0\" and a list holding zero are both truthy." },
-    ],
-  },
-  {
-    name: "C & C++",
-    slug: "c-cpp",
-    mods: [
-      { t: "Memory, Pointers & C Basics", d: "The machine under the languages: stack, heap, addresses." },
-      { t: "C++ Classes & the STL", d: "RAII, containers, iterators and algorithms that compose." },
-      { t: "Build Systems & Debugging", d: "Make/CMake, sanitizers and reading a segfault calmly." },
-    ],
-    bank: [
-      { q: "A pointer stores…", opts: ["a memory address", "a copy of a value", "a CPU register", "a file handle"], correct: 0, explain: "A pointer's value IS an address; dereferencing (*) follows that address to the data living there." },
-      { q: "Stack vs heap, in one line:", opts: ["stack is automatic scoped memory; heap is manually managed", "stack is slower", "heap is automatic", "there is no difference"], correct: 0, explain: "Stack frames vanish when functions return; heap allocations live until you (or a smart pointer) release them." },
-      { q: "RAII ties…", opts: ["resource lifetime to object scope", "RAM directly to I/O", "pointers to arrays", "templates to macros"], correct: 0, explain: "Constructors acquire, destructors release — so resources free automatically when objects go out of scope." },
-      { q: "#include <vector> gives you…", opts: ["a dynamic array container", "a linked list", "a preprocessor macro", "a thread pool"], correct: 0, explain: "std::vector is a growable contiguous array — the default container for 'I need a list of things' in C++." },
-    ],
-  },
-  {
-    name: "Data Structures & Algorithms (DSA)",
-    slug: "dsa",
-    mods: [
-      { t: "Complexity & Core Structures", d: "Big-O, arrays, linked lists, stacks and queues." },
-      { t: "Trees, Graphs & Traversals", d: "BFS, DFS and the shapes problems secretly have." },
-      { t: "Dynamic Programming Patterns", d: "Memoization, tabulation and recognizing the setup." },
-    ],
-    bank: [
-      { q: "Binary search on a sorted array runs in…", opts: ["O(log n)", "O(n)", "O(1)", "O(n log n)"], correct: 0, explain: "Each comparison halves the search space — a million items take ~20 steps." },
-      { q: "Which structure is FIFO?", opts: ["Stack", "Queue", "Binary tree", "Hash map"], correct: 1, explain: "A queue serves elements first-in-first-out; a stack is LIFO." },
-      { q: "Average-case hash map lookup is…", opts: ["O(1)", "O(log n)", "O(n)", "O(n²)"], correct: 0, explain: "A good hash scatters keys uniformly, so a lookup touches one bucket on average — worst case degrades to O(n)." },
-      { q: "Breadth-first search naturally uses a…", opts: ["queue", "stack", "heap", "skip list"], correct: 0, explain: "BFS explores level by level: enqueue a node's neighbours, dequeue the next frontier — FIFO order." },
-    ],
-  },
+const payments: Payment[] = [
+  { _id: "pay_1", studentId: "stu_ravi", courseId: "crs_calc", amount: 4999, currency: "INR", gateway: "razorpay", orderId: "order_MzK2a8Rt", paymentId: "pay_MzK2bQ91", status: "completed", method: "card", createdAt: iso(-128) },
+  { _id: "pay_2", studentId: "stu_meera", courseId: "crs_calc", amount: 2999, currency: "INR", gateway: "razorpay", orderId: "order_NaX4c2Lp", paymentId: "pay_NaX4d7Ws", status: "completed", method: "upi", createdAt: iso(-90) },
+  { _id: "pay_3", studentId: "stu_arjun", courseId: "crs_calc", amount: 2999, currency: "INR", gateway: "razorpay", orderId: "order_ObQ9e5Tv", paymentId: "pay_ObQ9f1Jm", status: "completed", method: "upi", createdAt: iso(-53) },
+  { _id: "pay_4", studentId: "stu_sofia", courseId: "crs_calc", amount: 2999, currency: "INR", gateway: "razorpay", orderId: "order_PcW7g3Rd", paymentId: "pay_PcW7h8Kb", status: "completed", method: "card", createdAt: iso(-36) },
+  { _id: "pay_5", studentId: "stu_lena", courseId: "crs_linalg", amount: 1999, currency: "INR", gateway: "razorpay", orderId: "order_QdY1j6Nc", paymentId: "pay_QdY1k2Xf", status: "completed", method: "card", createdAt: iso(-19) },
+  { _id: "pay_6", studentId: "stu_dmitri", courseId: "crs_calc", amount: 2999, currency: "INR", gateway: "razorpay", orderId: "order_ReZ8m4Hv", paymentId: "", status: "failed", method: "card", createdAt: iso(-17) },
 ];
 
-function placeholderLesson(subjectName: string, title: string): string {
-  return `
-<div class="ph-badge">Placeholder curriculum</div>
-<h3>${title}</h3>
-<p>The full written lesson for this module is being authored by the training team and ships to the live cohort before this module opens on the dashboard. Until then, use this page as your working brief: the quiz, task and checkpoint below are live and reviewed by your trainer like any other submission.</p>
+const liveClasses: LiveClass[] = [
+  { _id: "lc_1", courseId: "crs_calc", title: "Office Hours: the ε–δ Clinic", description: "Bring your stuck proofs. We untangle quantifier order together, live.", date: dateOnly(0), time: "19:00", durationMin: 90, provider: "jitsi", meetingLink: "https://meet.jit.si/EduLaunch-EpsilonDeltaClinic", meetingId: "EduLaunch-EpsilonDeltaClinic", status: "ongoing" },
+  { _id: "lc_2", courseId: "crs_calc", title: "Fourier Series, Derived Live", description: "From sines and cosines to Parseval — the full derivation on one blackboard.", date: dateOnly(2), time: "18:30", durationMin: 75, provider: "gmeet", meetingLink: "https://meet.google.com/xfk-zqwt-mde", meetingId: "xfk-zqwt-mde", status: "scheduled" },
+  { _id: "lc_3", courseId: "crs_calc", title: "Problem Set 3 Walkthrough", description: "MVT and integral inequalities, solved step by step with the cohort.", date: dateOnly(6), time: "20:00", durationMin: 60, provider: "jitsi", meetingLink: "https://meet.jit.si/EduLaunch-ProblemSet3", meetingId: "EduLaunch-ProblemSet3", status: "scheduled" },
+  { _id: "lc_4", courseId: "crs_calc", title: "Riemann Sums in Practice", description: "Numerical integration lab: midpoint vs trapezoid error, live-coded.", date: dateOnly(-3), time: "19:30", durationMin: 90, provider: "jitsi", meetingLink: "https://meet.jit.si/EduLaunch-RiemannLab", meetingId: "EduLaunch-RiemannLab", status: "completed", recordingUrl: "https://drive.google.com/file/d/riemann-lab-rec" },
+  { _id: "lc_5", courseId: "crs_linalg", title: "Metric Spaces Teaser (Optional)", description: "A taste of where analysis goes next.", date: dateOnly(1), time: "21:00", durationMin: 45, provider: "gmeet", meetingLink: "https://meet.google.com/qbr-vnkh-pzx", meetingId: "qbr-vnkh-pzx", status: "cancelled" },
+];
 
-<h3>What this module covers</h3>
-<ul>
-  <li>The core mental model behind <strong>${title}</strong> — and the one diagram that makes it click.</li>
-  <li>The 20% of syntax and API that does 80% of the day-to-day work in ${subjectName}.</li>
-  <li>How this module hands off to the next stop on the track, so nothing you learn here is an island.</li>
-</ul>
-
-<h3>How to proceed</h3>
-<p>Skim your existing notes on the topic, take the quiz to find your gaps, then attempt the task and the checkpoint project. Drafts save automatically — submit when your trainer can review real work, not a blank page.</p>
-
-<pre><code>// backend/seed.js
-// replace this placeholder lesson with full
-// subject-specific material before the next cohort</code></pre>`;
-}
-
-function placeholderModules(subjectId: string, track: PlaceholderTrack): ModuleDoc[] {
-  return track.mods.map((m, i) => {
-    const q0 = track.bank[i % track.bank.length];
-    const q1 = track.bank[(i + 1) % track.bank.length];
-    return {
-      _id: `mod_${track.slug}_${i + 1}`,
-      subject: subjectId,
-      order: i + 1,
-      title: m.t,
-      desc: m.d,
-      lesson: placeholderLesson(track.name, m.t),
-      quiz: [q0, q1],
-      task: `Warm-up for "${m.t}": in roughly 150 words plus a small code sketch, explain the core idea of this module and one real project where you would reach for it. Drafts save as you type — submit when it says something you'd defend in a live class.`,
-      project: {
-        title: `${track.name} Checkpoint — ${m.t}`,
-        description: `Placeholder build brief (will be replaced with the full project spec). Deliver: a small working artifact demonstrating "${m.t}" — code paste or link — plus three short notes: what you built, the hardest bug you hit, and the next step you'd take if you had one more week.`,
-      },
-      placeholder: true,
-    };
-  });
-}
-
-/* ------------------------------------------------------------------ */
-/* Demo students + progress                                            */
-/* ------------------------------------------------------------------ */
-
-interface DemoStudent {
-  id: string;
-  name: string;
-  subjectSlug: string;
-  joinedDaysAgo: number;
-  rows: Record<string, Partial<ProgressRow>>;
-}
-
-const DEMO_STUDENTS: DemoStudent[] = [
+export const TESTIMONIALS = [
   {
-    id: "stu_aisha",
-    name: "Aisha Bello",
-    subjectSlug: "mern",
-    joinedDaysAgo: 24,
-    rows: {
-      mod_mern_1: {
-        lessonDone: true,
-        quizScore: 100,
-        quizAttempts: 1,
-        taskText: "Semantic layout rebuilt: <header> + <nav>, <main> with <article>/<aside>, <footer>. border-box on *, one @media (max-width: 720px) that stacks the grid. Live at aisha-profile.netlify.app",
-        taskSubmitted: true,
-        projectText: "https://github.com/aishab/profile-page\n\nHardest call: chips as inline-flex vs grid — went with flex-wrap so they reflow naturally on narrow screens.",
-        projectSubmitted: true,
-      },
-      mod_mern_2: {
-        lessonDone: true,
-        quizScore: 75,
-        quizAttempts: 2,
-        taskText: "function rangeSum(a, b) { let s = 0; for (let i = a; i <= b; i++) s += i; return s; }\nrangeSum(1, 100) // 5050\n\nfunction debounce(fn, ms) { let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); }; }",
-        taskSubmitted: true,
-        projectText: "https://aisha-kanban.netlify.app — three columns, localStorage persistence, move/delete buttons. map() did the heavy lifting for rendering columns from state.",
-        projectSubmitted: true,
-      },
-      mod_mern_3: {
-        lessonDone: true,
-        quizScore: 75,
-        quizAttempts: 1,
-        taskText: "server.js with express.json() before routes. Tested: curl localhost:5000/api/quotes, curl .../api/quotes/2, curl -X POST with JSON body. 404 confirmed on /api/quotes/99.",
-        taskSubmitted: true,
-        projectText: "",
-        projectSubmitted: false,
-      },
-    },
+    name: "Ishita Nair",
+    role: "ISI Kolkata, M.Stat aspirant",
+    text: "I had read ε–δ four times in standard textbooks. The compiled lessons here argued it in the right order — challenger picks ε, you answer with N — and it finally clicked in one sitting.",
+    rating: 5,
   },
   {
-    id: "stu_daniel",
-    name: "Daniel Okafor",
-    subjectSlug: "mern",
-    joinedDaysAgo: 18,
-    rows: {
-      mod_mern_1: {
-        lessonDone: true,
-        quizScore: 75,
-        quizAttempts: 2,
-        taskText: "Done — header/nav/main(article+aside)/footer, stacks under 720px. Link: dokafor.github.io/layout-drill",
-        taskSubmitted: true,
-        projectText: "https://github.com/dokafor/profile-page — cards via grid auto-fill minmax(240px, 1fr).",
-        projectSubmitted: true,
-      },
-      mod_mern_2: {
-        lessonDone: true,
-        quizScore: null,
-        quizAttempts: 0,
-        taskText: "rangeSum done, still thinking about debounce — draft.",
-        taskSubmitted: false,
-        projectText: "",
-        projectSubmitted: false,
-      },
-    },
+    name: "Marcus Bell",
+    role: "Self-taught → ML engineer",
+    text: "Every ML course says 'you need analysis' and waves at a 700-page PDF. This is the first place the math actually rendered properly on my phone, with quizzes that check real understanding.",
+    rating: 5,
   },
   {
-    id: "stu_priya",
-    name: "Priya Nair",
-    subjectSlug: "dsa",
-    joinedDaysAgo: 12,
-    rows: {
-      mod_dsa_1: {
-        lessonDone: true,
-        quizScore: 100,
-        quizAttempts: 1,
-        taskText: "Big-O cheat sheet in my own words + linked list vs array table. Code sketch: Stack with push/pop/peek on an array, with the amortized-cost argument written out.",
-        taskSubmitted: true,
-        projectText: "Bracket balancer + LRU sketch: https://github.com/priyan/dsa-checkpoint-1",
-        projectSubmitted: true,
-      },
-      mod_dsa_2: {
-        lessonDone: true,
-        quizScore: 50,
-        quizAttempts: 1,
-        taskText: "",
-        taskSubmitted: false,
-        projectText: "",
-        projectSubmitted: false,
-      },
-    },
-  },
-  {
-    id: "stu_marco",
-    name: "Marco Silva",
-    subjectSlug: "python",
-    joinedDaysAgo: 9,
-    rows: {
-      mod_python_1: {
-        lessonDone: true,
-        quizScore: 100,
-        quizAttempts: 1,
-        taskText: "FizzBuzz with match statement, plus a number-guessing loop using while/else. Paste in repo README.",
-        taskSubmitted: true,
-        projectText: "https://github.com/marcosilva/py-basics — CLI quiz game, score tracking, input validation.",
-        projectSubmitted: true,
-      },
-    },
-  },
-  {
-    id: "stu_yuki",
-    name: "Yuki Tanaka",
-    subjectSlug: "generative-ai",
-    joinedDaysAgo: 6,
-    rows: {
-      mod_generative_ai_1: {
-        lessonDone: true,
-        quizScore: null,
-        quizAttempts: 0,
-        taskText: "",
-        taskSubmitted: false,
-        projectText: "",
-        projectSubmitted: false,
-      },
-    },
-  },
-  {
-    id: "stu_fatima",
     name: "Fatima Zahra",
-    subjectSlug: "machine-learning",
-    joinedDaysAgo: 30,
-    rows: {
-      mod_machine_learning_1: {
-        lessonDone: true,
-        quizScore: 100,
-        quizAttempts: 1,
-        taskText: "fit/predict pipeline on the iris set with train_test_split(stratify=y). Notebook linked.",
-        taskSubmitted: true,
-        projectText: "KNN vs LogisticRegression on a cleaned Titanic subset — notebook + 5-line write-up: https://github.com/fatimaz/ml-checkpoint-1",
-        projectSubmitted: true,
-      },
-      mod_machine_learning_2: {
-        lessonDone: true,
-        quizScore: 75,
-        quizAttempts: 1,
-        taskText: "Decision tree trained on churn data; depth=3 vs depth=None comparison table pasted.",
-        taskSubmitted: true,
-        projectText: "",
-        projectSubmitted: false,
-      },
-    },
+    role: "B.Sc. Mathematics, 2nd year",
+    text: "The 2-day trial convinced me before I paid a rupee. I finished Module 04's Riemann lab, saw the midpoint rule converge on screen, and enrolled the same evening.",
+    rating: 5,
   },
 ];
 
-/* ------------------------------------------------------------------ */
-/* Live classes                                                        */
-/* ------------------------------------------------------------------ */
-
-const LIVE_CLASSES: LiveClass[] = [
-  { _id: "lc_01", title: "MERN Cohort 6 — Express Deep Dive", date: dPlus(2), time: "19:00", link: "https://meet.google.com/xkr-tnfd-qwp" },
-  { _id: "lc_02", title: "Office Hours — Project Reviews (all tracks)", date: dPlus(5), time: "17:30", link: "https://meet.google.com/bhz-pmce-jyd" },
-  { _id: "lc_03", title: "DSA Crash Session — Graph Traversals Live", date: dPlus(8), time: "20:00", link: "https://meet.google.com/qmv-wdrt-eks" },
-  { _id: "lc_04", title: "Kickoff — Cohort 6 Orientation", date: dPlus(-3), time: "18:00", link: "https://meet.google.com/ryc-vjdo-mzs" },
+export const FAQS = [
+  {
+    q: "What exactly is the 2-day free trial?",
+    a: "Full access to every published module — lessons, quizzes, and labs — for 48 hours after registration. No card required. When the clock runs out, content locks until you pay the one-time fee.",
+  },
+  {
+    q: "What do I get after paying?",
+    a: "Permanent access to the course as it exists, every future re-typeset of the lessons, all scheduled live classes, and their recordings. The fee is one-time — there is no subscription.",
+  },
+  {
+    q: "Why is LaTeX a feature and not a footnote?",
+    a: "Because mathematics is its notation. Lessons are authored in LaTeX, compiled on our servers, and rendered with publication-grade typesetting (KaTeX) on every device — not screenshots, not approximations.",
+  },
+  {
+    q: "How do live classes work?",
+    a: "Sessions are scheduled inside the platform and meeting rooms (Jitsi or Google Meet) are generated automatically. You join from your dashboard; recordings appear on the schedule after class.",
+  },
+  {
+    q: "Can the instructor restrict my access to specific modules?",
+    a: "Yes — access control is per student and per module. If a module is restricted for you, it shows a lock with a note from the instructor; everything else remains untouched.",
+  },
 ];
-
-/* ------------------------------------------------------------------ */
-/* Assembly                                                            */
-/* ------------------------------------------------------------------ */
 
 export function seedDB(): DB {
-  seq = 0;
-
-  const subjects: Subject[] = SUBJECTS.map((s) => ({
-    _id: `sub_${s.slug}`,
-    name: s.name,
-    slug: s.slug,
-  }));
-
-  const modules: ModuleDoc[] = [
-    ...mernModules("sub_mern"),
-    ...TRACKS.flatMap((t) => placeholderModules(`sub_${t.slug}`, t)),
-  ];
-
-  const students: StudentRec[] = DEMO_STUDENTS.map((d) => ({
-    _id: d.id,
-    name: d.name,
-    subject: `sub_${d.subjectSlug}`,
-    createdAt: new Date(Date.now() - d.joinedDaysAgo * 86400000).toISOString(),
-  }));
-
-  const progress: ProgressRow[] = [];
-  for (const d of DEMO_STUDENTS) {
-    for (const [moduleId, partial] of Object.entries(d.rows)) {
-      progress.push({
-        _id: uid("prg_"),
-        student: d.id,
-        module: moduleId,
-        lessonDone: partial.lessonDone ?? false,
-        quizScore: partial.quizScore ?? null,
-        quizAttempts: partial.quizAttempts ?? 0,
-        taskText: partial.taskText ?? "",
-        taskSubmitted: partial.taskSubmitted ?? false,
-        projectText: partial.projectText ?? "",
-        projectSubmitted: partial.projectSubmitted ?? false,
-      });
-    }
-  }
-
   return {
-    subjects,
-    students,
-    trainers: [{ _id: "trn_01", name: "Coach Ade" }],
+    courses,
     modules,
-    progress,
-    liveClasses: [...LIVE_CLASSES],
+    students,
+    liveClasses,
+    payments,
+    trainers,
   };
 }
