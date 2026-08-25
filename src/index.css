@@ -501,6 +501,35 @@ body::after {
   animation: nodePop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* ---------- certificate printing ---------- */
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .cert-root,
+  .cert-root * {
+    visibility: visible;
+  }
+  .cert-root {
+    position: fixed;
+    inset: 0;
+    margin: 0;
+    max-width: none;
+  }
+  .print-hide {
+    display: none !important;
+  }
+  body,
+  body::after {
+    background: #0d1322 !important;
+  }
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
 /* ---------- reduced motion ---------- */
 
 @media (prefers-reduced-motion: reduce) {
