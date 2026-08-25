@@ -33,6 +33,16 @@ export function useScramble(text: string, duration = 850): string {
   return out;
 }
 
+/** Ticking clock — re-renders every `ms` and returns current epoch ms. */
+export function useNow(ms = 1000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), ms);
+    return () => window.clearInterval(id);
+  }, [ms]);
+  return now;
+}
+
 /** Typed terminal lines: returns how many lines are visible. */
 export function useTypedLineCount(total: number, stepMs = 420): number {
   const [n, setN] = useState(0);
