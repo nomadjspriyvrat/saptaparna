@@ -1,13 +1,8 @@
-import type { ModuleDoc, ProgressRow, Session } from "../types";
-import { avg, rowDone } from "../util";
+import type { Announcement, LiveClass, ModuleDoc, ProgressRow, Session } from "../types";
+import { ago, avg, fmtDate, levelInfo, rowDone, streakOf, untilLabel, xpOf } from "../util";
 import Reveal from "./Reveal";
 import Ring from "./Ring";
-import {
-  IconArrowRight,
-  IconBolt,
-  IconCheck,
-  IconLock,
-} from "./icons";
+import { IconArrowRight, IconBolt, IconCheck, IconFlame, IconLock, IconMedal, IconMegaphone, IconVideo } from "./icons";
 
 type NodeStatus = "done" | "active" | "open" | "locked";
 
@@ -22,10 +17,23 @@ interface DashboardProps {
   session: Session;
   modules: ModuleDoc[];
   progress: ProgressRow[];
+  liveClasses: LiveClass[];
+  announcements: Announcement[];
+  activity: Record<string, number>;
   onOpenModule: (id: string) => void;
+  onCertificate: () => void;
 }
 
-export default function Dashboard({ session, modules, progress, onOpenModule }: DashboardProps) {
+export default function Dashboard({
+  session,
+  modules,
+  progress,
+  liveClasses,
+  announcements,
+  activity,
+  onOpenModule,
+  onCertificate,
+}: DashboardProps) {
   const rows = new Map(progress.map((p) => [p.module, p]));
 
   let activeClaimed = false;
@@ -48,9 +56,16 @@ export default function Dashboard({ session, modules, progress, onOpenModule }: 
   const avgQuiz = avg(scores);
   const stepsDone = nodes.reduce((acc, n) => acc + stepsOf(n.row).filter((s) => s.done).length, 0);
 
+  const streak = streakOf(activity);
+  const xp = xpOf(progress);
+  const li = levelInfo(xp);
+
   const next = nodes.find((n) => n.status === "active" || n.status === "open");
   const nextStep = next ? stepsOf(next.row).find((s) => !s.done) : undefined;
   const firstName = session.name.trim().split(/\s+/)[0];
+
+  const nextLive = liveClasses.find((c) => new Date(`${c.date}T${c.time}:00`).getTime() >= Date.now());
+  const latestNotice = announcements[0];
 
   return (
     <div>
@@ -60,9 +75,12 @@ export default function Dashboard({ session, modules, progress, onOpenModule }: 
         <h1 className="text-[32px] font-extrabold leading-tight tracking-tight text-ink sm:text-[40px]">
           Welcome back, <span className="text-amber">{firstName}.</span>
         </h1>
-        <div className="flex items-center gap-2 pb-1.5">
-          <span className="chip chip-amber">{session.subject?.name}</span>
-          <span className="chip">{total} modules</span>
+        <div className="flex flex-wrap items-center gap-2 pb-1.5">
+          <span className={`chip ${streak > 0 ? "chip-amber" : ""}`}>
+            <IconFlame size={11} sw={2.2} /> {streak}-DAY STREAK
+          </span>
+          <span className="chip chip-mint">LVL {li.level}</span>
+          <span className="chip">{session.subject?.name}</span>
         </div>
       </div>
 
@@ -74,7 +92,7 @@ export default function Dashboard({ session, modules, progress, onOpenModule }: 
               <span className="font-display text-[34px] font-extrabold leading-none text-ink">{percent}%</span>
               <span className="label-xs mt-1.5">complete</span>
             </Ring>
-            <div className="grid flex-1 grid-cols-2 gap-x-8 gap-y-6 sm:grid-cols-3">
+            <div className="grid w-full flex-1 grid-cols-2 gap-x-8 gap-y-6 sm:grid-cols-3">
               <div>
                 <div className="font-display text-[30px] font-extrabold leading-none text-ink">
                   {doneCount}
@@ -96,10 +114,18 @@ export default function Dashboard({ session, modules, progress, onOpenModule }: 
                 <div className="label-xs mt-2">steps cleared</div>
               </div>
               <div className="col-span-2 sm:col-span-3">
-                <div className="h-2 overflow-hidden rounded-full bg-line/70">
+                <div className="flex items-center justify-between">
+                  <span className="font-display text-[10.5px] font-bold tracking-[0.12em] text-mute">
+                    LVL {li.level} · {xp} XP
+                  </span>
+                  <span className="font-display text-[10px] tracking-[0.1em] text-dim">
+                    {li.next ? `${li.span - li.into} XP TO LVL ${li.level + 1}` : "MAX LEVEL REACHED"}
+                  </span>
+                </div>
+                <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-line/70">
                   <div
                     className="h-full rounded-full bg-gradient-to-r from-amber to-mint transition-[width] duration-1000 ease-out"
-                    style={{ width: `${percent}%` }}
+                    style={{ width: `${li.next ? li.pct : 100}%` }}
                   />
                 </div>
               </div>
@@ -107,44 +133,105 @@ export default function Dashboard({ session, modules, progress, onOpenModule }: 
           </div>
         </Reveal>
 
-        <Reveal delay={110}>
-          <div className="panel flex h-full flex-col justify-between p-6">
-            {next ? (
-              <>
-                <div>
-                  <div className="label-xs">// next up</div>
-                  <div className="mt-3 font-display text-[13px] font-bold tracking-[0.08em] text-amber">
-                    MODULE {String(next.m.order).padStart(2, "0")} · {nextStep?.label.toUpperCase()}
+        {/* right column: resume + next live */}
+        <div className="flex flex-col gap-4">
+          <Reveal delay={110} className="flex-1">
+            <div className="panel flex h-full flex-col justify-between p-6">
+              {next ? (
+                <>
+                  <div>
+                    <div className="label-xs">// next up</div>
+                    <div className="mt-3 font-display text-[13px] font-bold tracking-[0.08em] text-amber">
+                      MODULE {String(next.m.order).padStart(2, "0")} · {nextStep?.label.toUpperCase()}
+                    </div>
+                    <p className="mt-2 text-[14px] font-semibold leading-snug text-ink">{next.m.title}</p>
+                    <p className="mt-1 text-[12.5px] leading-relaxed text-mute">
+                      {nextStep?.label === "Lesson"
+                        ? "Read the lesson, then mark it complete."
+                        : nextStep?.label === "Quiz"
+                          ? "Answer the questions — instant grading and explanations."
+                          : nextStep?.label === "Task"
+                            ? "A short exercise. Drafts save automatically."
+                            : "The module-capping build. Paste code or a link."}
+                    </p>
                   </div>
-                  <p className="mt-2 text-[14px] font-semibold leading-snug text-ink">{next.m.title}</p>
-                  <p className="mt-1 text-[12.5px] leading-relaxed text-mute">
-                    {nextStep?.label === "Lesson"
-                      ? "Read the lesson, then mark it complete."
-                      : nextStep?.label === "Quiz"
-                        ? "Answer the questions — instant grading and explanations."
-                        : nextStep?.label === "Task"
-                          ? "A short exercise. Drafts save automatically."
-                          : "The module-capping build. Paste code or a link."}
+                  <button className="btn btn-amber mt-5 w-full" onClick={() => onOpenModule(next.m._id)}>
+                    RESUME <IconArrowRight size={14} sw={2.4} />
+                  </button>
+                </>
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center text-center">
+                  <span className="text-mint">
+                    <IconBolt size={34} sw={1.5} />
+                  </span>
+                  <div className="mt-3 font-display text-[14px] font-bold tracking-[0.14em] text-mint">TRACK COMPLETE</div>
+                  <p className="mt-2 text-[12.5px] leading-relaxed text-mute">
+                    All {total} modules cleared. Claim your certificate below.
                   </p>
                 </div>
-                <button className="btn btn-amber mt-5 w-full" onClick={() => onOpenModule(next.m._id)}>
-                  RESUME <IconArrowRight size={14} sw={2.4} />
-                </button>
-              </>
-            ) : (
-              <div className="flex h-full flex-col items-center justify-center text-center">
-                <span className="text-mint">
-                  <IconBolt size={34} sw={1.5} />
+              )}
+            </div>
+          </Reveal>
+
+          {nextLive && (
+            <Reveal delay={190}>
+              <div className="panel flex items-center gap-4 border-sky/30 p-4">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky/10 text-sky">
+                  <IconVideo size={18} />
                 </span>
-                <div className="mt-3 font-display text-[14px] font-bold tracking-[0.14em] text-mint">TRACK COMPLETE</div>
-                <p className="mt-2 text-[12.5px] leading-relaxed text-mute">
-                  All {total} modules cleared. See you in the next live class.
-                </p>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="pulse-dot" style={{ background: "var(--color-sky)" }} />
+                    <span className="font-display text-[9.5px] font-bold tracking-[0.16em] text-sky">
+                      NEXT LIVE · {untilLabel(nextLive.date, nextLive.time).toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="mt-1 truncate text-[13px] font-semibold text-ink">{nextLive.title}</div>
+                  <div className="font-display text-[10.5px] tracking-[0.08em] text-dim">
+                    {fmtDate(nextLive.date).toUpperCase()} · {nextLive.time}
+                  </div>
+                </div>
               </div>
-            )}
+            </Reveal>
+          )}
+        </div>
+      </div>
+
+      {/* ---------- latest notice ---------- */}
+      {latestNotice && (
+        <Reveal delay={150}>
+          <div className="mt-6 flex items-start gap-3.5 rounded-lg border border-line border-l-[3px] border-l-amber/70 bg-panel2/70 px-4 py-3.5">
+            <span className="mt-0.5 shrink-0 text-amber">
+              <IconMegaphone size={16} />
+            </span>
+            <p className="min-w-0 text-[12.5px] leading-relaxed text-mute">
+              <span className="label-xs mr-2 text-[9px]! text-amber!">notice board</span>
+              {latestNotice.text}
+              <span className="ml-2 whitespace-nowrap font-display text-[10px] tracking-[0.08em] text-dim">
+                — {latestNotice.author}, {ago(latestNotice.at)}
+              </span>
+            </p>
           </div>
         </Reveal>
-      </div>
+      )}
+
+      {/* ---------- certificate banner ---------- */}
+      {percent === 100 && (
+        <Reveal>
+          <div className="mt-6 flex flex-wrap items-center gap-4 rounded-xl border border-mint/40 bg-mint/[0.06] px-5 py-4">
+            <span className="text-mint">
+              <IconMedal size={26} sw={1.5} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="font-display text-[12.5px] font-bold tracking-[0.14em] text-mint">TRACK COMPLETE — CERTIFICATE READY</div>
+              <p className="mt-0.5 text-[12.5px] text-mute">Every module, every step. Make it official.</p>
+            </div>
+            <button className="btn btn-mint" onClick={onCertificate}>
+              CLAIM CERTIFICATE
+            </button>
+          </div>
+        </Reveal>
+      )}
 
       {/* ---------- the track ---------- */}
       <div className="mt-10 flex flex-wrap items-center justify-between gap-3">
@@ -173,7 +260,6 @@ export default function Dashboard({ session, modules, progress, onOpenModule }: 
             return (
               <Reveal key={n.m._id} delay={Math.min(i * 70, 350)}>
                 <div className="relative flex gap-4 sm:gap-5">
-                  {/* node */}
                   <div
                     className={`node-pop relative z-10 mt-5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 font-display text-[13px] font-bold ${
                       n.status === "done"
@@ -190,7 +276,6 @@ export default function Dashboard({ session, modules, progress, onOpenModule }: 
                     {n.status === "active" && <span className="pulse-dot absolute -right-0.5 -top-0.5" />}
                   </div>
 
-                  {/* card */}
                   {n.unlocked ? (
                     <button
                       onClick={() => onOpenModule(n.m._id)}
@@ -256,7 +341,8 @@ export default function Dashboard({ session, modules, progress, onOpenModule }: 
           </span>
           <p className="text-[12.5px] leading-relaxed text-mute">
             <span className="font-semibold text-ink">How unlocking works:</span> a module opens only when every step of
-            the one before it — lesson, quiz, task and project — is complete. Quiz scores can be improved by retaking.
+            the one before it — lesson, quiz, task and project — is complete. Quiz scores can be improved by retaking,
+            and every saved step earns XP toward your level.
           </p>
         </div>
       </Reveal>

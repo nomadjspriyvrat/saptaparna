@@ -50,11 +50,20 @@ export interface StudentRec {
   name: string;
   subject: string;
   createdAt: string;
+  /** ISO date (YYYY-MM-DD) → number of progress saves that day */
+  activity?: Record<string, number>;
 }
 
 export interface TrainerRec {
   _id: string;
   name: string;
+}
+
+export interface Announcement {
+  _id: string;
+  text: string;
+  author: string;
+  at: string; // ISO datetime
 }
 
 export interface DB {
@@ -64,6 +73,7 @@ export interface DB {
   modules: ModuleDoc[];
   progress: ProgressRow[];
   liveClasses: LiveClass[];
+  announcements?: Announcement[];
 }
 
 export interface StudentWithSubject {
@@ -80,6 +90,7 @@ export interface StudentSummary {
   subject: Subject;
   modulesDone: number;
   totalModules: number;
+  avgQuiz: number | null;
 }
 
 export interface StudentModuleStatus {
